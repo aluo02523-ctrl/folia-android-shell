@@ -43,7 +43,8 @@ payload/                 entry.js / api-entry.js / static.js / start.sh
 tools/align.py           替代 zipalign（官方的是 x86_64，手机跑不了）
 tools/make_assets.py     把运行时和网页打成 assets
 build-manual.sh          ⭐ 离线打包：aapt2 → javac → d8 → 对齐 → apksigner
-docs/                    踩坑记录
+docs/SELF-CONTAINED.md   内置运行时的设计与完整构建流程
+docs/ROADMAP.md          已完成 / 已知限制 / 想做的
 ```
 
 ## 怎么构建（Termux，无需电脑）
