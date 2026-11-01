@@ -129,7 +129,7 @@ cd ~/folia-payload/app && npm init -y && npm i --omit=dev @neteasecloudmusicapie
 # 或把已经装好的 node_modules 放进 app/api/
 
 # 4) 脚本 + 证书
-cp /workspace/folia-app/payload/{static.js,api-entry.js,start.sh} ~/folia-payload/app/
+cp payload/{static.js,api-entry.js,start.sh} ~/folia-payload/app/
 mkdir -p ~/folia-payload/app/certs && cp $PREFIX/etc/tls/cert.pem ~/folia-payload/app/certs/ca.pem
 ```
 
