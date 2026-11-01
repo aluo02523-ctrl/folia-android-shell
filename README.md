@@ -92,8 +92,10 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 
 ## 许可证
 
-- 本仓库代码（壳 + 构建脚本）：MIT
-- 打包时会用到 Node.js（MIT）、ICU（Unicode License）、proot（**GPLv2**）、mksh（MirOS）——
-  如果你要分发 APK，请自行满足 GPLv2 的要求
-- Folia 本身属于上游项目，请遵守其许可证
-- 网易云 API 是第三方逆向实现，**仅供个人学习**，请自备合法账号，勿内置任何凭据
+本仓库的代码（Android 壳 + 构建脚本）用 **MIT**，见 [LICENSE](LICENSE)。
+
+打包成 APK 时会用到的第三方组件（Node.js / ICU / proot / mksh / OpenSSL）以及
+**proot 是 GPLv2 带来的义务**，都写在 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 里 ——
+只发布源码不涉及 GPL；要发 APK 的话请照着那份说明处理。
+
+音源接口是第三方实现，本仓库不内置任何账号或凭据，仅供个人学习使用。
