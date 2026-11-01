@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.nuonuo.folia'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.nuonuo.folia'
+        minSdk 26
+        targetSdk 34
+        versionCode 3
+        versionName '0.3'
+    }
+
+    buildTypes {
+        debug {
+            // 装在自己手机上，debug 签名就够
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+// 零依赖：不用 androidx / material
+dependencies {
+}

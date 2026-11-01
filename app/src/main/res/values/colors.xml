@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+    <color name="bg">#FFFFFFFF</color>
+    <color name="bg_soft">#FFFAFAFA</color>
+    <color name="ink">#FF111111</color>
+    <color name="ink_soft">#FF9AA0A6</color>
+    <color name="divider">#FFEEEFF1</color>
+    <color name="warn_bg">#FFFFF4E5</color>
+    <color name="warn_ink">#FFB26A00</color>
+    <!-- 终端配色 -->
+    <color name="term_bg">#FF0F1115</color>
+    <color name="term_bar">#FF171A1F</color>
+    <color name="term_fg">#FFD7DCE2</color>
+    <color name="term_dim">#FF7D8590</color>
+    <color name="ok">#FF34C759</color>
+    <color name="stopped">#FFF87171</color>
+</resources>

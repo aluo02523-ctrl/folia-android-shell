@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Folia</string>
+    <string name="start">启动</string>
+    <string name="stop">停止</string>
+    <string name="clear">清屏</string>
+    <string name="close">✕</string>
+    <string name="installing_hint">第一次打开要展开自带的运行时，请稍等</string>
+    <string name="empty_title">Folia 没起来</string>
+    <string name="empty_sub">内置服务（node）启动后马上退出了。\n点下面「启动服务」重试，或者「看日志」看看卡在哪。</string>
+    <string name="empty_starting">Folia 启动中…</string>
+    <string name="empty_start">启动服务</string>
+    <string name="empty_log">看日志 ›</string>
+</resources>

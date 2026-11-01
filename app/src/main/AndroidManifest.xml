@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ★ 关于 targetSdk 要说清楚：
+    本 App 用 proot 在私有目录里跑 node，而 Android 10+ 对 targetSdk>=29 的应用
+    禁止 exec 应用数据目录里的可执行文件（W^X 限制）。Termux 自己也是靠把
+    targetSdk 停在 28 来绕开的，这里同样处理，由 build-manual.sh 的参数传 28。
+    （不是"对抗检测"，就是这一个 API 行为差异，写在文档里明明白白。）
+
+  清单里故意不写 package="..." 和 <uses-sdk>，打包时由 aapt2 参数注入。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 加载本机 127.0.0.1:3000 的网页 + guest 里的 node 要联网取歌曲 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 前台服务：proot 进程的保姆，不能被系统随手回收 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 播放时不锁屏 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".FoliaService"
+            android:exported="false" />
+    </application>
+</manifest>

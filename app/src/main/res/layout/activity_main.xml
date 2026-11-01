@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  v0.2 · 全屏版
+  ==================================================================
+  整个界面只有一个 WebView，铺满全屏，没有任何标题栏 / 状态条 / Tab。
+  终端控制台变成"隐藏面板"：从屏幕顶边往下拉（或点一下顶边）才滑出来，
+  关掉之后屏幕上只剩 Folia 自己。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <!-- 唯一的常驻内容：Folia 网页 -->
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 隐藏触发条：屏幕最顶上 24dp，肉眼看不见，点一下/往下拉就呼出终端 -->
+    <View
+        android:id="@+id/topEdge"
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:layout_gravity="top"
+        android:background="@android:color/transparent" />
+
+    <!-- ===== 首次启动的解压进度（装好后自动消失） ===== -->
+    <LinearLayout
+        android:id="@+id/installOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="32dp"
+        android:background="#08080a"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Folia"
+            android:textColor="@color/term_fg"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/installing_hint"
+            android:textColor="@color/term_dim"
+            android:textSize="12sp" />
+
+        <ProgressBar
+            android:id="@+id/installBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="6dp"
+            android:layout_marginTop="28dp"
+            android:max="100"
+            android:progress="0" />
+
+        <TextView
+            android:id="@+id/installText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:fontFamily="monospace"
+            android:text="0%"
+            android:textColor="@color/term_fg"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- ===== 终端控制台（默认隐藏，覆盖全屏） ===== -->
+    <LinearLayout
+        android:id="@+id/terminalOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/term_bg"
+        android:visibility="gone">
+
+        <!-- 工具条 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingLeft="12dp"
+            android:paddingRight="8dp"
+            android:background="@color/term_bar">
+
+            <TextView
+                android:id="@+id/stateDot"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="●"
+                android:textColor="@color/stopped"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/btnStart"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:layout_marginLeft="10dp"
+                android:gravity="center"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:text="@string/start"
+                android:textColor="@color/term_fg"
+                android:textSize="12sp"
+                android:background="@drawable/pill" />
+
+            <TextView
+                android:id="@+id/btnStop"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:layout_marginLeft="8dp"
+                android:gravity="center"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:text="@string/stop"
+                android:textColor="@color/term_fg"
+                android:textSize="12sp"
+                android:background="@drawable/pill" />
+
+            <TextView
+                android:id="@+id/btnClear"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:layout_marginLeft="8dp"
+                android:gravity="center"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:text="@string/clear"
+                android:textColor="@color/term_dim"
+                android:textSize="12sp"
+                android:background="@drawable/pill" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/btnClose"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:text="@string/close"
+                android:textColor="@color/term_dim"
+                android:textSize="18sp" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/logScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:padding="12dp"
+            android:scrollbars="none">
+
+            <TextView
+                android:id="@+id/terminalText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/term_fg"
+                android:textSize="12sp"
+                android:textIsSelectable="true"
+                android:lineSpacingExtra="2dp" />
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- ===== 空状态（服务没起来时才有东西可点，起来了就全屏只有 Folia） ===== -->
+    <LinearLayout
+        android:id="@+id/emptyState"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="#FF0B0B0D"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/emptyTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/empty_title"
+            android:textColor="#FFF2F3F5"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/emptySub"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:layout_marginLeft="36dp"
+            android:layout_marginRight="36dp"
+            android:gravity="center"
+            android:lineSpacingExtra="3dp"
+            android:text="@string/empty_sub"
+            android:textColor="#FF8A9099"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/btnEmptyStart"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginTop="26dp"
+            android:gravity="center"
+            android:paddingLeft="26dp"
+            android:paddingRight="26dp"
+            android:text="@string/empty_start"
+            android:textColor="#FF0B0B0D"
+            android:textSize="14sp"
+            android:background="@drawable/btn_light" />
+
+        <TextView
+            android:id="@+id/btnEmptyLog"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:paddingLeft="20dp"
+            android:paddingRight="20dp"
+            android:text="@string/empty_log"
+            android:textColor="#FF8A9099"
+            android:textSize="12sp" />
+    </LinearLayout>
+</FrameLayout>

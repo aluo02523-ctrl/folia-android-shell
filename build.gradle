@@ -1,0 +1,4 @@
+// 根构建脚本（只在走 Gradle 路线时用；日常用 build-manual.sh，不需要下载 AGP）
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
