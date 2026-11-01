@@ -90,12 +90,15 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 
 另外：**targetSdk 必须是 28**。29+ 时 Android 会禁止 App 执行自己私有目录里的文件，整套运行时就跑不起来。
 
-## 许可证
+## 许可证与合规 ⚠️
 
 本仓库的代码（Android 壳 + 构建脚本）用 **MIT**，见 [LICENSE](LICENSE)。
 
-打包成 APK 时会用到的第三方组件（Node.js / ICU / proot / mksh / OpenSSL）以及
-**proot 是 GPLv2 带来的义务**，都写在 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 里 ——
-只发布源码不涉及 GPL；要发 APK 的话请照着那份说明处理。
+**但请注意：用本仓库构建出来的 APK 不是 MIT 作品。** 它里面还装着：
 
-音源接口是第三方实现，本仓库不内置任何账号或凭据，仅供个人学习使用。
+- **Folia 前端（dist）—— AGPL-3.0**：打包即分发 AGPL 作品，需提供完整源码与许可证全文
+- **网易云接口实现 —— 未声明许可证**（npm 上 `license` 字段为空）：再分发没有任何授权依据
+- proot（GPLv2）、libtalloc（LGPL-3.0+）、Node.js 及其一堆第三方（MIT/Apache-2.0/BSD/Unicode…）
+
+所以：**自己构建自己用没问题；要公开发布 APK 请先看 [docs/LICENSES.md](docs/LICENSES.md)。**
+那份文档列了每个组件、对应义务，以及「只发源码 / 合规发 APK / 内部自用」三种做法。
