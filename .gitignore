@@ -1,0 +1,28 @@
+# 构建产物
+build/
+build-ws/
+assets/
+*.apk
+*.idsig
+*.apk.idsig
+
+# 运行时与依赖（都靠脚本现生成）
+payload/api/
+payload/web/
+node_modules/
+node_modules_*
+
+# 签名（绝不入库）
+*.keystore
+*.jks
+
+# 工具链（从手机搬来的）
+android/
+*.jar
+
+# 临时
+*.log
+*.zip
+*.tgz
+.DS_Store
+__pycache__/
