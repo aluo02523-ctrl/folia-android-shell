@@ -75,6 +75,23 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 # → build/Folia-x.y-debug.apk
 ```
 
+## 为什么不带 proot？
+
+早先的设计里 proot 是「兜底路线」：万一 App 不能直接 exec 自己的 node，就套一层 proot。
+但实测下来它**从来没成功过**（SELinux 的 `untrusted_app` 域会拦住 proot 去 exec 第二个程序），
+真正让 App 跑起来的始终是「直连 node」这条路。
+
+所以 v1.12 把 proot 整条路线删了：
+
+- 少 0.5 MB 二进制，少三个组件（proot / libtalloc / mksh）
+- **顺带甩掉 GPLv2 与 LGPL-3.0 的源码义务**（见 `docs/LICENSES.md`）
+- 兼容性没有任何下降 —— 因为它本来就没工作过
+
+如果你在自己的设备上连直连都跑不起来（多见于把 targetSdk 提到 29+ 的改版），
+正确解法不是找回 proot，而是把 `node` 改名成 `libnode.so` 放进 APK 的 `lib/arm64-v8a/`，
+让系统把它当原生库解压 —— Android 保证那个目录可执行，SELinux 也不会拦。
+老版本（含 proot）在 git 历史与 `v1.11.0` 那个 release 里都还查得到。
+
 ## 踩过的 7 个坑（看完能省两天）
 
 | # | 现象 | 原因 / 修法 |
