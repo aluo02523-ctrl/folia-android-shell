@@ -129,7 +129,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         File appDir = EmbeddedRuntime.appDir(this);
         webTailer = new LogTailer(new File(appDir, "logs/web.log"));
         apiTailer = new LogTailer(new File(appDir, "logs/api.log"));
-        prootTailer = new LogTailer(new File(EmbeddedRuntime.logDir(this), "proot.log"));
+        prootTailer = new LogTailer(new File(EmbeddedRuntime.logDir(this), "runtime.log"));
 
         appendLog("· Folia 启动器 v" + appVersion() + "（自带运行时）\n");
         appendLog("· 运行时: " + EmbeddedRuntime.runtimeDir(this).getAbsolutePath() + "\n");
