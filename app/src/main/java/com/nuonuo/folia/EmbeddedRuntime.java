@@ -239,8 +239,7 @@ public final class EmbeddedRuntime {
         // 2) 网页 + API + 启动脚本
         unzipAsset(ctx, PAYLOAD, app, cb, done, total);
 
-        // 3) rootfs 骨架
-        createRootfs(rootfs);
+        // 3) 不再需要 rootfs 骨架（proot 路线已移除）
 
         // 4) 标记
         String ver = "0";
@@ -385,26 +384,6 @@ public final class EmbeddedRuntime {
         }
     }
 
-    /** guest 的根：只要目录齐全，剩下全靠 proot 挂进来 */
-    private static void createRootfs(File root) throws IOException {
-        String[] dirs = {
-                "usr", "usr/bin", "usr/lib", "usr/local", "usr/local/bin",
-                "etc", "tmp", "home", "root", "app", "app/home", "app/logs",
-                "dev", "proc", "sys", "system", "vendor", "apex", "data", "sdcard",
-                "var", "var/tmp", "bin", "sbin", "lib",
-        };
-        for (String d : dirs) {
-            File f = new File(root, d);
-            if (!f.isDirectory() && !f.mkdirs()) {
-                throw new IOException("建不了 rootfs 目录：" + f);
-            }
-        }
-        writeText(new File(root, "etc/passwd"), "root:x:0:0:root:/root:/usr/local/bin/mksh\napp:x:10000:10000:app:/app:/usr/local/bin/mksh\n");
-        writeText(new File(root, "etc/group"), "root:x:0:\napp:x:10000:\n");
-        writeText(new File(root, "etc/hosts"), "127.0.0.1 localhost\n");
-        // Android 的 DNS 走 netd（/dev 挂进来就能用），这里只是兜底
-        writeText(new File(root, "etc/resolv.conf"), "nameserver 8.8.8.8\nnameserver 1.1.1.1\n");
-    }
 
     private static void writeText(File f, String text) throws IOException {
         File parent = f.getParentFile();
