@@ -65,7 +65,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     private LogTailer webTailer;
     private LogTailer apiTailer;
-    private LogTailer prootTailer;
+    private LogTailer runtimeTailer;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final StringBuilder logBuf = new StringBuilder(16384);
 
@@ -129,7 +129,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         File appDir = EmbeddedRuntime.appDir(this);
         webTailer = new LogTailer(new File(appDir, "logs/web.log"));
         apiTailer = new LogTailer(new File(appDir, "logs/api.log"));
-        prootTailer = new LogTailer(new File(EmbeddedRuntime.logDir(this), "runtime.log"));
+        runtimeTailer = new LogTailer(new File(EmbeddedRuntime.logDir(this), "runtime.log"));
 
         appendLog("· Folia 启动器 v" + appVersion() + "（自带运行时）\n");
         appendLog("· 运行时: " + EmbeddedRuntime.runtimeDir(this).getAbsolutePath() + "\n");
@@ -388,7 +388,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private void drainLogs() {
         String a = webTailer == null ? null : webTailer.poll();
         String b = apiTailer == null ? null : apiTailer.poll();
-        String c = prootTailer == null ? null : prootTailer.poll();
+        String c = runtimeTailer == null ? null : runtimeTailer.poll();
         if (c != null) {
             appendLog(c);
         }
@@ -531,7 +531,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
             toast("运行时还没装好，稍等一下");
             return;
         }
-        appendLog("\n$ 启动内置运行时（proot + node）\n");
+        appendLog("\n$ 启动内置运行时（node）\n");
         EmbeddedRuntime.start(this);
         toast("正在启动 Folia…");
     }
@@ -603,9 +603,9 @@ public class MainActivity extends Activity implements View.OnClickListener {
         }, "install").start();
     }
 
-    /** 拉起前台服务（proot 在里面跑） */
+    /** 拉起前台服务（运行时在里面跑） */
     private void ensureRunning() {
-        appendLog("· 启动内置运行时（proot + node）\n");
+        appendLog("· 启动内置运行时（node）\n");
         EmbeddedRuntime.start(this);
     }
 
