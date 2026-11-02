@@ -19,15 +19,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 前台服务：proot 进程的"保姆"
+ * 前台服务：内置 node 运行时的"保姆"
  *
- * 为什么必须是前台服务：proot 是所有 guest 进程的父进程（ptrace 挂在那里），
- * 一旦被系统回收，音乐就断了。挂个常驻通知告诉系统"我在干活，别杀我"。
+ * 为什么必须是前台服务：node 进程一被系统回收，音乐就断了。
+ * 挂个常驻通知告诉系统"我在干活，别杀我"。
  *
- * 一条 proot 命令同时拉起 guest 里的两个 node 进程：
- *   node /app/api-entry.js  → :4000  网易云 API
- *   node /app/static.js     → :3000  Folia 前端静态站
- * （细节在 app/start.sh 里）
+ * 一条命令拉起 entry.js，它再派生两个子进程：
+ *   node api-entry.js  → :4000  接口层
+ *   node static.js     → :3000  前端静态站
+ *
  */
 public class FoliaService extends Service {
 
@@ -39,8 +39,6 @@ public class FoliaService extends Service {
     private Thread watchdog;
     private volatile boolean stopping = false;
     private int restarts = 0;
-    /** "proot"（正常路线）或 "direct"（兜底：直接跑 node，不经过 proot） */
-    private String mode = "direct";
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -112,8 +110,6 @@ public class FoliaService extends Service {
                     + " uid=" + android.os.Process.myUid());
             DiagLog.line(this, "env", "selinux=" + readSmall("/proc/self/attr/current"));
             DiagLog.line(this, "env", "nativeLibDir=" + getApplicationInfo().nativeLibraryDir);
-            probeExec("mksh", new File(EmbeddedRuntime.binDir(this), "mksh").getAbsolutePath(),
-                    new String[]{"-c", "echo probe-ok"});
             probeExec("node", new File(EmbeddedRuntime.binDir(this), "node").getAbsolutePath(),
                     new String[]{"-e", "console.log('probe-ok')"});
             probeExec("sh", "/system/bin/sh", new String[]{"-c", "echo probe-ok"});
@@ -182,20 +178,15 @@ public class FoliaService extends Service {
     }
 
     private void launch() {
-        // 正常路线是 proot（自带 rootfs）。
-        // 「直连」只作为兜底：只有在 proot 连续起不来时才会切换过去（见 watch()）。
-        // 1.7 的探针已经证明：本机 SELinux 域是 untrusted_app_27，App 能 exec 私有目录里的
-        // mksh/node/proot，所以 proot 路线是可行的——之前失败是另外两个原因：
-        //   ① exec /system/bin/sh 被拒（已换成随包的 mksh）
-        //   ② node 启动时去读 Termux 的 openssl.cnf 被杀 EACCES（见 OPENSSL_CONF）
-        if ("direct".equals(mode)) {
-            if (launchDirect()) {
-                return;
-            }
-            DiagLog.line(this, "launch", "直连也起不来，改回 proot");
-            mode = "proot";
+        // 只走「直连」：App 直接 exec node，不经过 proot。
+        // 砍掉 proot 的两个原因：
+        //   ① 实测 proot 去 exec 第二个程序会被 SELinux 拒（bind 到 /usr/bin 更糟）
+        //   ② proot 是 GPLv2、它依赖的 libtalloc 是 LGPL-3.0+，打进 APK 就等于分发二进制，
+        //      白白多出源码义务；而直连路线根本用不到它
+        if (launchDirect()) {
+            return;
         }
-        launchProot();
+        DiagLog.line(this, "launch", "直连起不来，看上面的 direct 日志");
     }
 
     /** 直接跑 node + entry.js（不需要 proot / mksh），成功返回 true */
@@ -253,7 +244,7 @@ public class FoliaService extends Service {
 
             proc = pb.start();
             DiagLog.line(this, "direct", "已启动 pid=" + pidOf(proc));
-            pumpOutput(proc, new File(EmbeddedRuntime.logDir(this), "proot.log"));
+            pumpOutput(proc, new File(EmbeddedRuntime.logDir(this), "runtime.log"));
             watch(proc);
             return true;
         } catch (Throwable t) {
@@ -262,80 +253,6 @@ public class FoliaService extends Service {
         }
     }
 
-    private void launchProot() {
-        File root = EmbeddedRuntime.rootfsDir(this);
-        File app = EmbeddedRuntime.appDir(this);
-        File bin = EmbeddedRuntime.binDir(this);
-        File lib = EmbeddedRuntime.libDir(this);
-        File logFile = new File(EmbeddedRuntime.logDir(this), "proot.log");
-
-        List<String> cmd = new ArrayList<String>();
-        cmd.add(new File(bin, "proot").getAbsolutePath());
-        // 注意：不要加 --link2symlink！
-        // 实测（Termux 里同样命令复现）：带这个参数时 proot exec 绑定目录里的程序
-        // 会直接失败（App 里报 Permission denied，Termux 里报 No such file），
-        // 去掉就正常。我们的 rootfs 是骨架、运行时不需要装包，用不上硬链接转换。
-        cmd.add("--kill-on-exit");     // proot 一死，guest 里所有进程跟着死
-        cmd.add("-0");                 // 假装自己是 root（guest 里的 uid 0）
-        cmd.add("-r");
-        cmd.add(root.getAbsolutePath());
-
-        // 这 6 个必须挂：不挂 /system 的话 bionic 的 linker 都找不到（fatal error: loader not found）
-        String[] binds = {"/dev", "/proc", "/sys", "/system", "/vendor", "/apex"};
-        for (String b : binds) {
-            cmd.add("-b");
-            cmd.add(b);
-        }
-        // 自己的东西：/usr/lib 放 .so，/usr/bin 放 node/proot，/app 放网页和脚本
-        // lib 目录用「同路径 bind」：这样 Java 这边设的 LD_LIBRARY_PATH（宿主路径）
-        // 在 guest 里也能直接命中，不用再在脚本里换一套路径。
-        cmd.add("-b");
-        cmd.add(lib.getAbsolutePath() + ":" + lib.getAbsolutePath());
-        // ★ 不要 bind 到 /usr/bin 或 /bin！实测这两个目标会让 proot 挂载失败
-        //   （App 里表现为 exec Permission denied，Termux 里表现为 loader not found）。
-        //   /usr/local/bin 是好的。
-        cmd.add("-b");
-        cmd.add(bin.getAbsolutePath() + ":/usr/local/bin");
-        cmd.add("-b");
-        cmd.add(app.getAbsolutePath() + ":/app");
-        cmd.add("-w");
-        cmd.add("/app");
-
-        // 启动前自检：确认三个可执行文件都在、都有 x 位（会打到终端面板上，方便对账）
-        for (String n : new String[]{"proot", "node", "mksh"}) {
-            preflight(new File(bin, n));
-        }
-        // ★ 关键：绝对不能 exec /system/bin/sh —— SELinux 的 untrusted_app 域不允许
-        //   执行 shell 域的程序，会直接 "Permission denied"。Termux 也是用自己的 mksh。
-        //   所以随包带了一个 Termux 编译的 mksh（bionic，靠 /system/bin/linker64 启动，这个是允许的）。
-        cmd.add("/usr/local/bin/mksh");
-        cmd.add("/app/start.sh");
-
-        try {
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            // proot 自己是 Termux 版（bionic），RUNPATH 指向 Termux 的 lib 目录，
-            // 那个目录在我们这里不存在，所以用它自己的 lib 目录覆盖一下。
-            // guest 里的进程由 start.sh 重新 export LD_LIBRARY_PATH=/usr/lib。
-            pb.environment().put("LD_LIBRARY_PATH", lib.getAbsolutePath());
-            File prootTmp = new File(getCacheDir(), "proot-tmp");
-            prootTmp.mkdirs();   // 不建的话 proot 会刷 can't canonicalize 警告
-            pb.environment().put("PROOT_TMP_DIR", prootTmp.getAbsolutePath());
-            pb.environment().put("HOME", new File(app, "home").getAbsolutePath());
-            pb.environment().put("FOLIA_LIB", lib.getAbsolutePath());   // start.sh 用它设 LD_LIBRARY_PATH
-            pb.redirectErrorStream(true);
-            proc = pb.start();
-            Log.i(TAG, "proot 已启动 pid=" + pidOf(proc) + " 命令=" + cmd);
-            DiagLog.line(this, "launch", "proot pid=" + pidOf(proc));
-            DiagLog.line(this, "launch", "cmd=" + join(cmd));
-            DiagLog.line(this, "launch", "LD_LIBRARY_PATH=" + lib.getAbsolutePath());
-            pumpOutput(proc, logFile);
-            watch(proc);
-        } catch (Throwable t) {
-            Log.e(TAG, "启动 proot 失败", t);
-            writeLog(logFile, "\n!! 启动 proot 失败: " + t + "\n");
-            stopSelf();
-        }
-    }
 
 
     /** 检查一个可执行文件：存在？有 x 位？没有就修一把，并把结果写进日志 */
@@ -353,7 +270,7 @@ public class FoliaService extends Service {
         Log.i(TAG, line);
         DiagLog.line(this, "preflight", line);
         if (!x) {
-            writeLog(new File(EmbeddedRuntime.logDir(this), "proot.log"), "\n!! " + f.getName() + " 不可执行\n");
+            writeLog(new File(EmbeddedRuntime.logDir(this), "runtime.log"), "\n!! " + f.getName() + " 不可执行\n");
         }
     }
 
@@ -410,12 +327,12 @@ public class FoliaService extends Service {
                     }
                 }
             }
-        }, "proot-out");
+        }, "runtime-out");
         t.setDaemon(true);
         t.start();
     }
 
-    /** 看门狗：proot 意外退出就重拉（最多 3 次，别无限重生） */
+    /** 看门狗：node 意外退出就重拉（最多 3 次，别无限重生） */
     private void watch(final Process p) {
         watchdog = new Thread(new Runnable() {
             @Override
@@ -425,29 +342,15 @@ public class FoliaService extends Service {
                     code = p.waitFor();
                 } catch (InterruptedException ignored) {
                 }
-                Log.i(TAG, "proot 退出 code=" + code);
-                DiagLog.line(FoliaService.this, "exit", "proot code=" + code + " stopping=" + stopping);
+                Log.i(TAG, "运行时退出 code=" + code);
+                DiagLog.line(FoliaService.this, "exit", "runtime code=" + code + " stopping=" + stopping);
                 if (stopping) {
-                    return;
-                }
-                if ("proot".equals(mode) && restarts >= 2) {
-                    // proot 反复挂 → 换直连兜底，至少让用户能听歌
-                    DiagLog.line(FoliaService.this, "launch", "proot 连挂 " + restarts + " 次，切直连兜底");
-                    mode = "direct";
-                    restarts = 0;
-                    try {
-                        Thread.sleep(800);
-                    } catch (InterruptedException ignored) {
-                    }
-                    if (!stopping) {
-                        launch();
-                    }
                     return;
                 }
                 if (restarts < 3) {
                     restarts++;
-                    writeLog(new File(EmbeddedRuntime.logDir(FoliaService.this), "proot.log"),
-                            "\n!! proot 意外退出（code=" + code + "），第 " + restarts + " 次重拉\n");
+                    writeLog(new File(EmbeddedRuntime.logDir(FoliaService.this), "runtime.log"),
+                            "\n!! 运行时意外退出（code=" + code + "），第 " + restarts + " 次重拉\n");
                     try {
                         Thread.sleep(1500);
                     } catch (InterruptedException ignored) {
@@ -456,12 +359,12 @@ public class FoliaService extends Service {
                         launch();
                     }
                 } else {
-                    writeLog(new File(EmbeddedRuntime.logDir(FoliaService.this), "proot.log"),
-                            "\n!! proot 反复退出，放弃自动重启。请打开日志面板看原因。\n");
+                    writeLog(new File(EmbeddedRuntime.logDir(FoliaService.this), "runtime.log"),
+                            "\n!! 运行时反复退出，放弃自动重启。请打开日志面板看原因。\n");
                     stopSelf();
                 }
             }
-        }, "proot-watch");
+        }, "runtime-watch");
         watchdog.setDaemon(true);
         watchdog.start();
     }
@@ -471,7 +374,7 @@ public class FoliaService extends Service {
         proc = null;
         if (p != null) {
             try {
-                p.destroy();     // proot --kill-on-exit 会顺带收掉 guest 里的 node
+                p.destroy();     // entry.js 会顺带收掉它派生的两个 node
             } catch (Throwable ignored) {
             }
             try {
