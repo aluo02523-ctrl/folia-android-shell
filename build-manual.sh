@@ -19,11 +19,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 APP_ID="com.nuonuo.folia"
-VER_NAME="1.11"
-VER_CODE="21"
+VER_NAME="1.12"
+VER_CODE="22"
 MIN_SDK="26"
 # ★ targetSdk 必须是 28：Android 10+ 不允许 targetSdk>=29 的应用 exec 私有目录里的
-#   可执行文件（proot / node 就在那儿）。Termux 也是这么干的。
+#   可执行文件（node 就在那儿）。Termux 也是这么干的。
 TARGET_SDK="28"
 OUT="build"
 APK_UNSIGNED="$OUT/Folia-unsigned.apk"
@@ -88,7 +88,7 @@ say "① aapt2 compile（编译资源）"
 sed "s|<manifest |<manifest package=\"$APP_ID\" |" "$MANIFEST" > "$OUT/AndroidManifest.xml"
 
 # ------------------------------------------------------------ 1.5 装 assets
-# 运行时（proot/node/.so）和应用（网页+API）从这两个目录来，默认是手机上的试验目录
+# 运行时（node/.so）和应用（网页+API）从这两个目录来，默认是手机上的试验目录
 NATIVE_DIR="${NATIVE_DIR:-$HOME/folia-payload/native}"
 APP_PAYLOAD_DIR="${APP_PAYLOAD_DIR:-$HOME/folia-payload/app}"
 [ -d "$NATIVE_DIR" ] || die "找不到运行时目录：$NATIVE_DIR（用 NATIVE_DIR=... 指定）"
