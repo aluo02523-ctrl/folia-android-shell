@@ -1,72 +1,130 @@
 # Folia Android Shell
 
-给 [Folia](https://github.com/chthollyphile/folia-major)（一个动态歌词音乐播放器）做的 Android 壳。
+给 [Folia](https://github.com/chthollyphile/folia-major) 做的 Android 壳：
 
-**满屏只有 Folia，一个多余像素都没有。** 内置 node 运行时，装完不依赖任何外部终端。
+**全屏只有播放器**，运行时（Node.js）内置在 APK 里，装完不需要任何外部终端或电脑。
 
 ```
 ┌─────────────────────────────┐
 │                             │
-│                             │
-│      WebView 127.0.0.1:3000 │   ← 平时只有这个
-│                             │
+│   WebView ← 127.0.0.1:3000  │   平时只有这个
 │                             │
 └─────────────────────────────┘
-   从顶边往下拉 ↓
+        从屏幕顶边下拉 ↓
 ┌─────────────────────────────┐
-│ ● 启动  停止  清屏        ✕ │   ← 藏起来的终端面板
-│ [static] Folia web on :3000 │
-│ [api-entry] 网易云 API :4000│
+│ ● 启动  停止  清屏        ✕ │
+│ [api]  网易云接口层 :4000    │   隐藏的日志面板
+│ [web]  静态站      :3000    │
 └─────────────────────────────┘
 ```
 
-## 它做了什么
+## 原理
 
-App 里自带一份 node 运行时（node + ICU + 依赖 `.so`，约 96 MB），启动时：
+### 1. 一个 App，两个进程角色
 
 ```
-App ──exec──▶ files/runtime/bin/node  files/app/entry.js
-                  ├── api-entry.js  →  127.0.0.1:4000  网易云 API
-                  └── static.js     →  127.0.0.1:3000  Folia 静态站
+App 进程 (Java)                    node 进程 (运行时)
+  │                                    │
+  ├─ MainActivity  WebView ──HTTP──▶  127.0.0.1:3000  静态站（前端 dist）
+  │                                    │
+  └─ FoliaService  ──exec──▶ node      127.0.0.1:4000  接口层
+       （前台服务，守护它）
 ```
 
-- 前端是**预构建**的 `vite build` 产物（不需要 vite/esbuild，省 100MB+）
-- 应用目录里的 `diag.log`（`/sdcard/Android/media/<包名>/diag.log`）记录安装进度、
-  proot 命令、node 输出、JS 控制台、页面加载错误 —— 黑盒调试全靠它
+- **入口**：`payload/entry.js` 是个进程总管，它派生两个子进程：
+  `api-entry.js`（接口层）和 `static.js`（静态站）。谁挂了整体退出。
+- **App 只负责两件事**：把 WebView 指到 `127.0.0.1:3000`，以及别让 node 被系统杀掉。
+
+### 2. 运行时是「解压出来的」，不是装出来的
+
+APK 的 `assets/` 里带着：
+
+| 内容 | 大小 | 说明 |
+|---|---|---|
+| `native/bin/node` | 51 MB | Node.js 本体（arm64） |
+| `native/lib/*.so` | 44 MB | node 的依赖：ICU、OpenSSL、libc++、sqlite、c-ares… |
+| `payload.zip` | 34 MB | 前端 dist + 接口层 + entry.js |
+
+首次启动把它们解压到应用私有目录：
+
+```
+files/runtime/bin/node      可执行文件
+files/runtime/lib/*.so      动态库
+files/app/…                 前端与接口层
+files/app/logs/*.log        两个服务各自的输出
+```
+
+`install-plan.txt` 里记着每个文件的字节数，解压时逐个校验，进度条按实际字节算。
+
+### 3. 三个关键设计
+
+**为什么前端要预构建**
+前端本来就是 `vite build` 出来的静态文件。带上 vite/esbuild 要多 100 MB，运行期还要编译，
+所以只在构建阶段跑一次 `vite build`，APK 里只放 dist。运行时就是一个 60 行的静态服务器。
+
+**为什么 targetSdk 是 28**
+Android 10 起，`targetSdk ≥ 29` 的应用**不允许执行自己私有目录里的文件**。
+整套运行时（node 在 `files/` 里）就依赖这个能力，所以 targetSdk 停在 28。
+
+**为什么 node 要显式指定 OpenSSL 配置**
+这台机器上的 node 是 Termux 编译的，默认去读 `/data/data/com.termux/files/usr/etc/tls/openssl.cnf`。
+别的 App 读那个路径会被拒（EACCES），OpenSSL 对权限错误是致命错误，node 直接退出。
+所以随包带一份 `certs/openssl.cnf`，启动时用 `OPENSSL_CONF` 指过去。
+
+### 4. 怎么知道它出了什么事
+
+Android 的应用私有目录别人读不到。所以关键事件会**再抄一份**到：
+
+```
+/sdcard/Android/media/com.nuonuo.folia/diag.log
+```
+
+里面有：安装进度、进程启动命令、node 的全部输出、WebView 的 JS 控制台、页面加载错误。
+排查问题基本都靠它。
 
 ## 目录
 
 ```
 app/                     Android 壳（纯 Java，零第三方依赖，不用 androidx）
-payload/                 entry.js / api-entry.js / static.js / start.sh
-tools/align.py           替代 zipalign（官方的是 x86_64，手机跑不了）
-tools/make_assets.py     把运行时和网页打成 assets
+  src/main/java/…/
+    MainActivity.java    全屏 WebView + 隐藏面板 + 健康探测
+    FoliaService.java    前台服务：起 node、守护、看门狗
+    EmbeddedRuntime.java 首次解压、版本标记、路径约定
+    DiagLog.java         diag.log
+    LogTailer.java       增量读日志
+payload/
+  entry.js               进程总管：派生 api / web 两个子进程
+  api-entry.js           接口层（:4000）
+  static.js              静态站（:3000，60 行，零依赖）
+tools/
+  align.py               替代 zipalign（官方版是 x86_64，手机上跑不了）
+  make_assets.py         把运行时和网页打成 assets
 build-manual.sh          ⭐ 离线打包：aapt2 → javac → d8 → 对齐 → apksigner
-docs/SELF-CONTAINED.md   内置运行时的设计与完整构建流程
-docs/ROADMAP.md          已完成 / 已知限制 / 想做的
+docs/
+  HOW-IT-WORKS.md        更细的进程模型与文件布局
+  LICENSES.md            许可证清单与分发义务
+  ROADMAP.md             已知限制 / 后续计划
 ```
 
-## 怎么构建（Termux，无需电脑）
+## 构建
+
+不需要 Gradle，也不需要电脑 —— 一台装了 Termux 的手机就够：
 
 ```bash
 # 1. 工具链
 pkg install openjdk-17 aapt2 python3 unzip
 
-# 2. 准备运行时（从 Termux 自己这份拷）
+# 2. 运行时（从 Termux 自己这份复制；必须是 arm64）
 mkdir -p ~/folia-payload/native/bin ~/folia-payload/native/lib
-cp $PREFIX/bin/node $PREFIX/bin/proot ~/folia-payload/native/bin/
+cp $PREFIX/bin/node ~/folia-payload/native/bin/
 cp $PREFIX/lib/libicu*.so* $PREFIX/lib/libcrypto.so.3 $PREFIX/lib/libssl.so.3 \
    $PREFIX/lib/libc++_shared.so $PREFIX/lib/libcares.so $PREFIX/lib/libffi.so \
-   $PREFIX/lib/libsqlite3.so $PREFIX/lib/libz.so.1 $PREFIX/lib/libtalloc.so.2 \
-   $PREFIX/lib/libandroid-shmem.so ~/folia-payload/native/lib/
-# mksh（Termux 包里就有）
-cp $PREFIX/bin/mksh ~/folia-payload/native/bin/
+   $PREFIX/lib/libsqlite3.so $PREFIX/lib/libz.so.1 ~/folia-payload/native/lib/
 
-# 3. 应用 payload
+# 3. 网页与接口层
 mkdir -p ~/folia-payload/app
 cp payload/*.js ~/folia-payload/app/
-(cd /path/to/folia-major && npx vite build)
-cp -r /path/to/folia-major/dist ~/folia-payload/app/web
+(cd /path/to/folia-major && npx vite build) && cp -r /path/to/folia-major/dist ~/folia-payload/app/web
 mkdir -p ~/folia-payload/app/api
 cp -r /path/to/folia-major/node_modules/@neteasecloudmusicapienhanced/api/* ~/folia-payload/app/api/
 
@@ -75,48 +133,19 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 # → build/Folia-x.y-debug.apk
 ```
 
-## 为什么不带 proot？
+## 已知限制
 
-早先的设计里 proot 是「兜底路线」：万一 App 不能直接 exec 自己的 node，就套一层 proot。
-但实测下来它**从来没成功过**（SELinux 的 `untrusted_app` 域会拦住 proot 去 exec 第二个程序），
-真正让 App 跑起来的始终是「直连 node」这条路。
+| 限制 | 说明 / 解法 |
+|---|---|
+| targetSdk 固定 28 | 见上文；想提上去要把 node 改名 `libnode.so` 放进 `lib/arm64-v8a/`，让系统当原生库解压 |
+| 首次启动慢 | 要解压约 96 MB，20–40 秒，之后秒开 |
+| 只有 arm64 | 运行时是 arm64 的 node 与 `.so` |
+| 音源自备 | 接口层是第三方实现，收费/版权曲目可能返回空 |
+| 无锁屏控制 | 后台能继续播，但没有 MediaSession 卡片 |
 
-所以 v1.12 把 proot 整条路线删了：
+## 许可证
 
-- 少 0.5 MB 二进制，少三个组件（proot / libtalloc / mksh）
-- **顺带甩掉 GPLv2 与 LGPL-3.0 的源码义务**（见 `docs/LICENSES.md`）
-- 兼容性没有任何下降 —— 因为它本来就没工作过
+本仓库代码（壳 + 构建脚本）用 **MIT**，见 [LICENSE](LICENSE)。
 
-如果你在自己的设备上连直连都跑不起来（多见于把 targetSdk 提到 29+ 的改版），
-正确解法不是找回 proot，而是把 `node` 改名成 `libnode.so` 放进 APK 的 `lib/arm64-v8a/`，
-让系统把它当原生库解压 —— Android 保证那个目录可执行，SELinux 也不会拦。
-老版本（含 proot）在 git 历史与 `v1.11.0` 那个 release 里都还查得到。
-
-## 踩过的 7 个坑（看完能省两天）
-
-| # | 现象 | 原因 / 修法 |
-|---|---|---|
-| 1 | `execve("/system/bin/sh"): Permission denied` | SELinux 的 `untrusted_app` 域不许执行 shell 域程序 → **随包带 mksh**，exec 它 |
-| 2 | proot `execve("/usr/bin/xxx"): Permission denied` | proot 把宿主目录 bind 到 guest 的 `/usr/bin`、`/bin` 会失败。**后来整条 proot 路线都删了**（见 `docs/LICENSES.md`），这条当历史记录留着 |
-| 3 | 升级 APK 后新文件不出现 | `isInstalled()` 只判断标记文件存在 → 改成**标记文件里存 versionName 并比对** |
-| 4 | node 启动即死 `rc=13` | Termux 版 node 把 openssl 配置路径写死成 Termux 的目录，别的 App 读它 EACCES → 设 **`OPENSSL_CONF`** 指向随包的 `certs/openssl.cnf` |
-| 5 | `EADDRINUSE 127.0.0.1:3000` | 同一份 entry 被起了两次 → 启动前**先探端口**，已在服务就跳过 |
-| 6 | `File.setExecutable()` 不生效 | 部分 ROM 静默失败 → 改用 **`Os.chmod(path, 0755)`** |
-| 7 | 页面一直黑屏 `ERR_CONNECTION_REFUSED` | WebView 比 node 先 `loadUrl` → **等端口探测通了再加载** |
-
-另外：**targetSdk 必须是 28**。29+ 时 Android 会禁止 App 执行自己私有目录里的文件，整套运行时就跑不起来。
-
-## 许可证与合规 ⚠️
-
-本仓库的代码（Android 壳 + 构建脚本）用 **MIT**，见 [LICENSE](LICENSE)。
-
-**但请注意：用本仓库构建出来的 APK 不是 MIT 作品。** 它里面还装着：
-
-- **Folia 前端（dist）—— AGPL-3.0**：打包即分发 AGPL 作品，需提供完整源码与许可证全文
-
-（proot 那条路线已经删掉了，GPLv2 / LGPL 组件不再进包）
-- **网易云接口实现 —— 未声明许可证**（npm 上 `license` 字段为空）：再分发没有任何授权依据
-- Node.js 及其一堆第三方（MIT / Apache-2.0 / BSD / Unicode…）
-
-所以：**自己构建自己用没问题；要公开发布 APK 请先看 [docs/LICENSES.md](docs/LICENSES.md)。**
-那份文档列了每个组件、对应义务，以及「只发源码 / 合规发 APK / 内部自用」三种做法。
+**打包出来的 APK 不是 MIT 作品**：它包含 AGPL-3.0 的前端产物，以及一个未声明许可证的
+第三方接口实现。自己构建自己用没问题；要公开分发二进制，请先看 [docs/LICENSES.md](docs/LICENSES.md)。
