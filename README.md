@@ -31,7 +31,6 @@ App ──exec──▶ files/runtime/bin/node  files/app/entry.js
 ```
 
 - 前端是**预构建**的 `vite build` 产物（不需要 vite/esbuild，省 100MB+）
-- proot + mksh 也随包带着，只作为兜底路线
 - 应用目录里的 `diag.log`（`/sdcard/Android/media/<包名>/diag.log`）记录安装进度、
   proot 命令、node 输出、JS 控制台、页面加载错误 —— 黑盒调试全靠它
 
@@ -81,7 +80,7 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 | # | 现象 | 原因 / 修法 |
 |---|---|---|
 | 1 | `execve("/system/bin/sh"): Permission denied` | SELinux 的 `untrusted_app` 域不许执行 shell 域程序 → **随包带 mksh**，exec 它 |
-| 2 | proot `execve("/usr/bin/xxx"): Permission denied` | proot 把宿主目录 bind 到 guest 的 `/usr/bin`、`/bin` 会失败 → 改 bind 到 **`/usr/local/bin`** |
+| 2 | proot `execve("/usr/bin/xxx"): Permission denied` | proot 把宿主目录 bind 到 guest 的 `/usr/bin`、`/bin` 会失败。**后来整条 proot 路线都删了**（见 `docs/LICENSES.md`），这条当历史记录留着 |
 | 3 | 升级 APK 后新文件不出现 | `isInstalled()` 只判断标记文件存在 → 改成**标记文件里存 versionName 并比对** |
 | 4 | node 启动即死 `rc=13` | Termux 版 node 把 openssl 配置路径写死成 Termux 的目录，别的 App 读它 EACCES → 设 **`OPENSSL_CONF`** 指向随包的 `certs/openssl.cnf` |
 | 5 | `EADDRINUSE 127.0.0.1:3000` | 同一份 entry 被起了两次 → 启动前**先探端口**，已在服务就跳过 |
@@ -97,8 +96,10 @@ NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build
 **但请注意：用本仓库构建出来的 APK 不是 MIT 作品。** 它里面还装着：
 
 - **Folia 前端（dist）—— AGPL-3.0**：打包即分发 AGPL 作品，需提供完整源码与许可证全文
+
+（proot 那条路线已经删掉了，GPLv2 / LGPL 组件不再进包）
 - **网易云接口实现 —— 未声明许可证**（npm 上 `license` 字段为空）：再分发没有任何授权依据
-- proot（GPLv2）、libtalloc（LGPL-3.0+）、Node.js 及其一堆第三方（MIT/Apache-2.0/BSD/Unicode…）
+- Node.js 及其一堆第三方（MIT / Apache-2.0 / BSD / Unicode…）
 
 所以：**自己构建自己用没问题；要公开发布 APK 请先看 [docs/LICENSES.md](docs/LICENSES.md)。**
 那份文档列了每个组件、对应义务，以及「只发源码 / 合规发 APK / 内部自用」三种做法。
