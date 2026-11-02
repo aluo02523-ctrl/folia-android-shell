@@ -3,7 +3,7 @@
 # Folia 启动器 · 工作区构建脚本（不依赖 Termux）
 #
 # 为什么要它：
-#   Termux 后台老被系统掐，编译机随时会消失。工作区（Ubuntu proot）装上
+#   Termux 后台老被系统掐，编译机随时会消失。工作区（Ubuntu 容器）装上
 #   JDK + aapt 之后可以自己出 APK：工具链全在本地，不联网。
 #
 # 依赖（都已经准备好）：
@@ -55,7 +55,7 @@ sed "s|<manifest |<manifest package=\"$APP_ID\" |" "$SRC/AndroidManifest.xml" > 
 say "① aapt2 compile（编译资源）"
 "$AAPT2" compile --dir "$SRC/res" -o "$OUT/res.zip"
 
-# 运行时（proot/node/mksh/.so）和应用（网页+API）两个目录
+# 运行时（node/.so）和应用（网页+API）两个目录
 NATIVE_DIR="${NATIVE_DIR:-/tmp/apk/assets/native}"
 APP_PAYLOAD_DIR="${APP_PAYLOAD_DIR:-/tmp/apk/payload}"
 [ -d "$NATIVE_DIR" ] || die "找不到运行时目录：$NATIVE_DIR"
