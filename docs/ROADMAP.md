@@ -7,7 +7,8 @@
 - [x] 全屏 WebView 壳（空状态、下拉呼出终端面板、沉浸式全屏）
 - [x] 内置 node 运行时（node + ICU + 依赖 `.so`，约 96 MB，解压到应用私有目录）
 - [x] 首次启动解压进度、按版本号重解压、字节数校验
-- [x] 前台服务守护 + 看门狗（proot 路线与直连路线都支持）
+- [x] 前台服务守护 + 看门狗（只保留直连路线）
+- [x] 移除 proot / mksh（顺带甩掉 GPLv2 与 LGPL 组件，包体也小了 0.5 MB）
 - [x] 离线构建链：`aapt2 → javac → d8 → align.py → apksigner`，不依赖 Gradle
 - [x] 诊断日志 `Android/media/<包名>/diag.log`（安装进度、进程输出、JS 控制台、HTTP 错误）
 - [x] 打包时用预构建的静态站点，不再需要 vite / esbuild（省 100 MB+）
