@@ -22,23 +22,13 @@ import java.util.List;
  * 老版本要用户自己装 Termux、自己在 Termux 里跑脚本。现在这套东西全部搬进 APK：
  *
  *   应用私有目录/
- *     runtime/bin/proot, node          ← 可执行文件（proot 从这里启动）
- *     runtime/lib/*.so                 ← node 和 proot 依赖的动态库
- *     rootfs/                          ← proot 的"根文件系统"骨架（只有目录和几个配置文件）
- *     app/web/                         ← Folia 前端产物（vite build 的 dist）
- *     app/api/                         ← 网易云 API（node_modules）
- *     app/start.sh                     ← guest 里的启动脚本
- *     logs/                            ← web.log / api.log / proot.log
+ *     runtime/bin/node          ← 可执行文件
+ *     runtime/lib/*.so          ← node 依赖的动态库
+ *     app/                      ← 网页、接口层、启动脚本
+ *     app/logs/                 ← web.log / api.log / runtime.log
  *
- * 为什么 rootfs 只有骨架：proot 会把手机的 /system /vendor /apex /dev /proc 直接
- * 挂进 guest，node 是 bionic 程序、动态链接器就是 /system/bin/linker64，
- * 所以真正需要的只有"目录结构 + 我们自己那几个文件"，一个几 KB 的空壳就够，
- * 不用背一个几百 MB 的 Termux bootstrap。
- *
- * ★ 为什么可执行文件必须放 runtime/bin（应用私有目录）而不是 assets：
- *   assets 里没法执行；而 Android 10+ 对 targetSdk>=29 的应用禁止 exec 应用数据目录
- *   里的文件（W^X 限制）。本 App 的 targetSdk 故意留在 28（和 Termux 一样的做法），
- *   所以私有目录里的 proot/node 可以正常 exec。
+ * 为什么不把运行时留在 assets 里直接跑：assets 里的东西没法执行，
+ * 必须先解压到应用私有目录，再 chmod 0755（用 Os.chmod，File.setExecutable 不可靠）。
  */
 public final class EmbeddedRuntime {
 
@@ -239,7 +229,6 @@ public final class EmbeddedRuntime {
         // 2) 网页 + API + 启动脚本
         unzipAsset(ctx, PAYLOAD, app, cb, done, total);
 
-        // 3) 不再需要 rootfs 骨架（proot 路线已移除）
 
         // 4) 标记
         String ver = "0";
