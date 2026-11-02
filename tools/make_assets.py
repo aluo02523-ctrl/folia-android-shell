@@ -4,7 +4,7 @@
 把「运行时 + 应用」装进 assets/。
 
 产出三样东西：
-  assets/native/<相对路径>    ← proot、node、各种 .so（原样，安装时拷到 runtime/）
+  assets/native/<相对路径>    ← node、各种 .so（原样，安装时拷到 runtime/）
   assets/payload.zip          ← 网页 + API + 脚本（解压到 app/）
   assets/install-plan.txt     ← 清单：每行「路径<TAB>字节数」，App 用它算进度
 
@@ -21,8 +21,7 @@ import os
 import sys
 import zipfile
 
-# 这些是 proot 路线的东西。proot 是 GPLv2、libtalloc 是 LGPL-3.0+，
-# 打进 APK 就等于分发二进制，要额外承担源码义务；直连路线用不到它们，所以排除。
+# 不进包的组件（许可证与本项目不兼容），就算目录里有也过滤掉。
 SKIP_NATIVE = {"bin/proot", "bin/mksh"}
 
 
@@ -35,7 +34,7 @@ def walk_files(root, skip_prefixes=()):
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
             rel = os.path.relpath(full, root).replace(os.sep, "/")
-            if rel in SKIP_NATIVE:          # proot / mksh：GPL 组件，不进包
+            if rel in SKIP_NATIVE:          # 许可证不兼容，不进包
                 continue
             if any(rel.startswith(p) for p in skip_prefixes):
                 continue
