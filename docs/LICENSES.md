@@ -23,17 +23,19 @@ MIT 与下面任何许可证都兼容：把 MIT 代码放进一个 GPL/AGPL 的�
 | **Folia 前端（`vite build` 的 dist）** | **AGPL-3.0** | 🔴 必须提供完整对应源码（含你的修改）、附 AGPL 全文、保留版权声明。AGPL 还要求「通过网络交互的用户」也能拿到源码 |
 | **`@neteasecloudmusicapienhanced/api`** | **未声明** | 🔴 npm 上 `license` 字段为空 = 默认保留所有权利。**把它打进公开分发的 APK 是最危险的一步** |
 | Node.js 运行时 | MIT（内含 V8: BSD-3、OpenSSL: Apache-2.0、ICU: Unicode、zlib: zlib、c-ares/llhttp/nghttp2 等） | 🟡 保留 Node 的 `LICENSE` 与所有第三方 notice |
-| `proot` | **GPLv2** | 🟠 分发二进制需一并提供对应源码，或有效的书面获取方式 |
-| `libtalloc.so.2`（proot 依赖） | **LGPL-3.0-or-later** | 🟠 需提供源码与许可证全文（动态链接可用「替换库」方式满足） |
 | `libc++_shared.so` | Apache-2.0 WITH LLVM-exception | 🟡 附许可证全文 |
 | `libsqlite3.so` | Public Domain | 🟢 无义务 |
 | `libcares.so` / `libffi.so` | MIT | 🟢 保留声明 |
 | `libz.so.1` | zlib License | 🟢 保留声明 |
 | `libandroid-shmem.so` | Apache-2.0（以 Termux 包声明为准） | 🟡 附全文 |
-| `mksh` | MirOS / BSD 系 | 🟢 保留声明 |
 | `openssl.cnf` / `ca.pem` | Apache-2.0 / Mozilla CA 清单 | 🟡 附声明 |
 
 > 注：具体版本以你构建时从 Termux 拷的那份为准；换版本请重新核对。
+>
+> **2026-11-02 更新**：proot 路线已从代码和构建里移除
+> （`tools/make_assets.py` 会跳过 `bin/proot`、`bin/mksh`），
+> 因此打包产物里**不再有 GPLv2 / LGPL 组件**，也不再需要 libtalloc。
+> 现在剩下的许可风险只有下面两个 🔴。
 
 ## 3. 三种做法，按风险从低到高
 
@@ -49,7 +51,6 @@ MIT 与下面任何许可证都兼容：把 MIT 代码放进一个 GPL/AGPL 的�
 
 1. **把壳也改成 AGPL-3.0**（与本项目「打包 AGPL 前端」的定位一致，最省心）
 2. Release 里附：AGPL 全文、Folia 上游源码地址（含 commit）、**你对前端的修改说明（当前：无修改）**
-3. proot / libtalloc：附源码地址与许可证全文，或写一份有效的书面 offer
 4. **把 `@neteasecloudmusicapienhanced/api` 从包里拿掉** —— 它没有许可证，
    再分发它没有任何授权依据。可行的替代：首次启动时提示用户自行安装，
    或者干脆不提供这一层（前端只连用户自己的 API 地址）
@@ -68,7 +69,7 @@ MIT 与下面任何许可证都兼容：把 MIT 代码放进一个 GPL/AGPL 的�
 
 ## 5. 常见误解澄清
 
-- ❌「MIT 项目里塞 GPL 代码没关系」→ 分发时整体要按 GPL/AGPL 走，MIT 只是"不额外添麻烦"
+- ❌「MIT 项目里塞 AGPL 代码没关系」→ 分发时整体要按 AGPL 走，MIT 只是"不额外添麻烦"
 - ❌「没写许可证 = 可以随便用」→ 恰恰相反，**没写 = 保留所有权利**
 - ❌「我只发 APK 不发源码，所以不用管」→ 分发二进制同样触发 GPL/AGPL 的源码义务
 - ✅「我只在自己手机上编译自己用」→ 不算分发，义务不触发
