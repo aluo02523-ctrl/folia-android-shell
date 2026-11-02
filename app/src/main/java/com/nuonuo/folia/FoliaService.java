@@ -178,18 +178,15 @@ public class FoliaService extends Service {
     }
 
     private void launch() {
-        // 只走「直连」：App 直接 exec node，不经过 proot。
-        // 砍掉 proot 的两个原因：
-        //   ① 实测 proot 去 exec 第二个程序会被 SELinux 拒（bind 到 /usr/bin 更糟）
-        //   ② proot 是 GPLv2、它依赖的 libtalloc 是 LGPL-3.0+，打进 APK 就等于分发二进制，
-        //      白白多出源码义务；而直连路线根本用不到它
+        // App 直接 exec 运行时里的 node，没有中间层：
+        // 少一层进程、少一份 ptrace 开销，也不会踩到「App 能不能 exec 私有目录」的坑
         if (launchDirect()) {
             return;
         }
         DiagLog.line(this, "launch", "直连起不来，看上面的 direct 日志");
     }
 
-    /** 直接跑 node + entry.js（不需要 proot / mksh），成功返回 true */
+    /** 启动 node + entry.js，成功返回 true */
     private boolean launchDirect() {
         // 已经有一份在跑（看门狗重拉、按钮再点、系统重投 intent）→ 别起第二份，
         // 否则第二个进程会在 bind 3000 时 EADDRINUSE 直接崩，连带第一个也被收掉。
@@ -297,7 +294,7 @@ public class FoliaService extends Service {
         }
     }
 
-    /** 把 proot 的输出（含 guest 里两个 node 的日志）落到 logs/proot.log */
+    /** 把运行时的输出（含两个子进程的日志）落到 logs/runtime.log */
     private void pumpOutput(final Process p, final File logFile) {
         final OutputStream os;
         try {
