@@ -21,6 +21,10 @@ import os
 import sys
 import zipfile
 
+# 这些是 proot 路线的东西。proot 是 GPLv2、libtalloc 是 LGPL-3.0+，
+# 打进 APK 就等于分发二进制，要额外承担源码义务；直连路线用不到它们，所以排除。
+SKIP_NATIVE = {"bin/proot", "bin/mksh"}
+
 
 def walk_files(root, skip_prefixes=()):
     for dirpath, dirnames, filenames in os.walk(root):
@@ -31,6 +35,8 @@ def walk_files(root, skip_prefixes=()):
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
             rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if rel in SKIP_NATIVE:          # proot / mksh：GPL 组件，不进包
+                continue
             if any(rel.startswith(p) for p in skip_prefixes):
                 continue
             yield rel, full
