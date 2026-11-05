@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.Log;
 
 import java.io.File;
@@ -19,25 +21,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 前台服务：内置 node 运行时的"保姆"
+ * 前台服务：内置 node 运行时的保姆。
  *
- * 为什么必须是前台服务：node 进程一被系统回收，音乐就断了。
- * 挂个常驻通知告诉系统"我在干活，别杀我"。
- *
- * 一条命令拉起 entry.js，它再派生两个子进程：
- *   node api-entry.js  → :4000  接口层
- *   node static.js     → :3000  前端静态站
- *
+ * node 一被系统回收音乐就断，所以挂常驻通知告诉系统"我在干活"。
+ * 只拉一个进程（entry.js），它再派生接口层和静态站；谁挂了整条链退出，这里重拉。
  */
 public class FoliaService extends Service {
 
     private static final String TAG = "FoliaService";
     private static final String CHANNEL_ID = "folia-runtime";
     private static final int NOTIF_ID = 1;
+    /** entry.js 写下的进程清单：每行「名字 pid」 */
+    private static final String PID_FILE = ".pids";
+    private static final int MAX_LOG_BYTES = 1024 * 1024;
 
-    private Process proc;
+    private volatile Process proc;
     private Thread watchdog;
     private volatile boolean stopping = false;
+    private volatile long startedAt = 0;
     private int restarts = 0;
 
     @Override
@@ -63,12 +64,12 @@ public class FoliaService extends Service {
             return START_NOT_STICKY;
         }
 
-        // 先挂通知（Android 要求 startForeground 必须在几秒内调用）
+        // startForeground 必须在几秒内调用
         startForeground(NOTIF_ID, buildNotification(isRunning() ? "Folia 运行中" : "Folia 启动中…"));
 
         if (!EmbeddedRuntime.isInstalled(this)) {
             Log.e(TAG, "还没解压完，不能启动");
-            toastLog("运行时没装好，先去主界面等解压完成");
+            DiagLog.line(this, "start", "运行时没装好，拒绝启动");
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -79,7 +80,7 @@ public class FoliaService extends Service {
             envProbe();
             launch();
         }
-        // 被杀后自动重来（用户主动停止时 stopping=true，不会自动拉起来）
+        // 被杀后自动重来；用户主动停止时 stopping=true，不会自动拉起
         return START_STICKY;
     }
 
@@ -98,10 +99,7 @@ public class FoliaService extends Service {
 
     // ---------------------------------------------------------------- 起进程
 
-    /**
-     * 环境探针：把「这个 App 到底能不能 exec 私有目录里的程序」这件事写成事实，
-     * 免得靠猜。日志会落到 /sdcard/Android/media/<包名>/diag.log。
-     */
+    /** 把「这个 App 到底能不能 exec 私有目录里的程序」写成事实，不靠猜 */
     private void envProbe() {
         try {
             DiagLog.line(this, "env", "targetSdk=" + getApplicationInfo().targetSdkVersion
@@ -166,11 +164,12 @@ public class FoliaService extends Service {
     }
 
     private boolean isRunning() {
-        if (proc == null) {
+        Process p = proc;
+        if (p == null) {
             return false;
         }
         try {
-            proc.exitValue();
+            p.exitValue();
             return false;
         } catch (IllegalThreadStateException alive) {
             return true;
@@ -178,22 +177,30 @@ public class FoliaService extends Service {
     }
 
     private void launch() {
-        // App 直接 exec 运行时里的 node，没有中间层：
-        // 少一层进程、少一份 ptrace 开销，也不会踩到「App 能不能 exec 私有目录」的坑
-        if (launchDirect()) {
-            return;
+        if (!launchDirect()) {
+            DiagLog.line(this, "launch", "启动失败，看上面的 direct 日志");
         }
-        DiagLog.line(this, "launch", "直连起不来，看上面的 direct 日志");
     }
 
     /** 启动 node + entry.js，成功返回 true */
     private boolean launchDirect() {
-        // 已经有一份在跑（看门狗重拉、按钮再点、系统重投 intent）→ 别起第二份，
-        // 否则第二个进程会在 bind 3000 时 EADDRINUSE 直接崩，连带第一个也被收掉。
-        if (PortProbe0.isUp(3000) && PortProbe0.isUp(4000)) {
-            DiagLog.line(this, "direct", "已有实例在服务（3000/4000 都通），跳过启动");
+        // 自己那份还活着就别起第二份：第二个会在 bind 3000 时 EADDRINUSE 崩掉
+        if (proc != null && isRunning()) {
+            DiagLog.line(this, "direct", "已有实例在跑，跳过启动");
             return true;
         }
+
+        // 端口通但没有进程句柄 = 上一条链留下的孤儿。不清理掉的话，
+        // 下面的启动会因为端口被占失败，而看门狗也没法挂到任何进程上。
+        if (PortProbe.isOpen(3000) || PortProbe.isOpen(4000)) {
+            DiagLog.line(this, "direct", "端口有响应但没有进程句柄，清理残留进程");
+            killOrphans();
+            if (!waitPortsFree(2500)) {
+                DiagLog.line(this, "direct", "端口仍被占（可能是别的 App），放弃启动");
+                return false;
+            }
+        }
+
         File app = EmbeddedRuntime.appDir(this);
         File bin = EmbeddedRuntime.binDir(this);
         File lib = EmbeddedRuntime.libDir(this);
@@ -231,15 +238,15 @@ public class FoliaService extends Service {
                 env.put("SSL_CERT_FILE", ca.getAbsolutePath());
                 env.put("NODE_EXTRA_CA_CERTS", ca.getAbsolutePath());
             }
-            // Termux 版 node 把 openssl 配置路径编死成 /data/data/com.termux/files/usr/etc/tls/openssl.cnf，
-            // 在别人手机上那个文件存在但读不了 → OpenSSL 报 EACCES 直接让 node 退出（rc=13）。
-            // 所以必须显式指到我们随包的这份。
+            // 这份 node 把 openssl 配置路径编死成 Termux 的目录，别的 App 读会被拒（EACCES）
+            // 而 OpenSSL 对权限错误是致命错误，所以必须显式指到随包的这份。
             File opensslConf = new File(app, "certs/openssl.cnf");
             if (opensslConf.exists()) {
                 env.put("OPENSSL_CONF", opensslConf.getAbsolutePath());
             }
 
             proc = pb.start();
+            startedAt = System.currentTimeMillis();
             DiagLog.line(this, "direct", "已启动 pid=" + pidOf(proc));
             pumpOutput(proc, new File(EmbeddedRuntime.logDir(this), "runtime.log"));
             watch(proc);
@@ -250,25 +257,70 @@ public class FoliaService extends Service {
         }
     }
 
-
-
-    /** 检查一个可执行文件：存在？有 x 位？没有就修一把，并把结果写进日志 */
-    private void preflight(File f) {
-        boolean exists = f.exists();
-        boolean x = f.canExecute();
-        if (exists && !x) {
-            try {
-                android.system.Os.chmod(f.getAbsolutePath(), 0755);
-            } catch (Throwable ignored) {
+    /** 上一轮被强杀会留下子进程；只杀 cmdline 里带本包名的，避免 pid 复用误伤 */
+    private void killOrphans() {
+        File f = new File(EmbeddedRuntime.appDir(this), PID_FILE);
+        if (!f.isFile()) {
+            return;
+        }
+        List<Integer> pids = new ArrayList<Integer>();
+        try {
+            String text = readSmall(new java.io.FileInputStream(f), 4096);
+            for (String line : text.split("\n")) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length != 2) {
+                    continue;
+                }
+                try {
+                    int pid = Integer.parseInt(parts[1]);
+                    if (pid > 0 && pid != android.os.Process.myPid() && isOurs(pid)) {
+                        pids.add(pid);
+                        signal(pid, OsConstants.SIGTERM);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
             }
-            x = f.canExecute();
+            f.delete();
+        } catch (Throwable t) {
+            DiagLog.line(this, "direct", "读 pid 文件失败: " + t);
         }
-        String line = "· 自检 " + f.getName() + " exists=" + exists + " x=" + x + " size=" + f.length();
-        Log.i(TAG, line);
-        DiagLog.line(this, "preflight", line);
-        if (!x) {
-            writeLog(new File(EmbeddedRuntime.logDir(this), "runtime.log"), "\n!! " + f.getName() + " 不可执行\n");
+        if (pids.isEmpty()) {
+            return;
         }
+        DiagLog.line(this, "direct", "清理进程 " + pids);
+        try {
+            Thread.sleep(400);
+        } catch (InterruptedException ignored) {
+        }
+        for (Integer pid : pids) {
+            signal(pid, OsConstants.SIGKILL);
+        }
+    }
+
+    private boolean isOurs(int pid) {
+        String cmd = readSmall("/proc/" + pid + "/cmdline");
+        return cmd.contains(getPackageName());
+    }
+
+    private static void signal(int pid, int sig) {
+        try {
+            Os.kill(pid, sig);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private boolean waitPortsFree(long ms) {
+        long until = System.currentTimeMillis() + ms;
+        while (System.currentTimeMillis() < until) {
+            if (!PortProbe.isOpen(3000) && !PortProbe.isOpen(4000)) {
+                return true;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException ignored) {
+            }
+        }
+        return !PortProbe.isOpen(3000) && !PortProbe.isOpen(4000);
     }
 
     private static String join(List<String> parts) {
@@ -294,11 +346,16 @@ public class FoliaService extends Service {
         }
     }
 
-    /** 把运行时的输出（含两个子进程的日志）落到 logs/runtime.log */
+    /** node 的 stdout/stderr 落到 runtime.log，同时抄进 diag.log */
     private void pumpOutput(final Process p, final File logFile) {
         final OutputStream os;
         try {
-            os = new FileOutputStream(logFile, false);
+            // 重拉时别把上一次崩溃前的输出冲掉，那正是要看的
+            if (logFile.length() > MAX_LOG_BYTES) {
+                logFile.delete();
+            }
+            os = new FileOutputStream(logFile, true);
+            os.write(("\n===== " + new java.util.Date() + " 启动 =====\n").getBytes("UTF-8"));
         } catch (IOException e) {
             return;
         }
@@ -307,13 +364,12 @@ public class FoliaService extends Service {
             public void run() {
                 InputStream in = p.getInputStream();
                 byte[] buf = new byte[8192];
-                long lastMirror = 0;
                 try {
                     int r;
                     while ((r = in.read(buf)) > 0) {
                         os.write(buf, 0, r);
                         os.flush();
-                        // 每块都抄一份到 diag.log：进程如果启动即退出，只抄 1 秒一次会丢光
+                        // 进程如果启动即退出，只按秒抄会丢光，所以每块都抄
                         DiagLog.append(FoliaService.this, new String(buf, 0, r, "UTF-8"));
                     }
                 } catch (Throwable ignored) {
@@ -329,7 +385,7 @@ public class FoliaService extends Service {
         t.start();
     }
 
-    /** 看门狗：node 意外退出就重拉（最多 3 次，别无限重生） */
+    /** 看门狗：意外退出就重拉，最多 3 次；稳定跑过一分钟再崩就重新计数 */
     private void watch(final Process p) {
         watchdog = new Thread(new Runnable() {
             @Override
@@ -339,10 +395,13 @@ public class FoliaService extends Service {
                     code = p.waitFor();
                 } catch (InterruptedException ignored) {
                 }
-                Log.i(TAG, "运行时退出 code=" + code);
                 DiagLog.line(FoliaService.this, "exit", "runtime code=" + code + " stopping=" + stopping);
                 if (stopping) {
                     return;
+                }
+                long uptime = System.currentTimeMillis() - startedAt;
+                if (uptime > 60000) {
+                    restarts = 0;
                 }
                 if (restarts < 3) {
                     restarts++;
@@ -357,7 +416,7 @@ public class FoliaService extends Service {
                     }
                 } else {
                     writeLog(new File(EmbeddedRuntime.logDir(FoliaService.this), "runtime.log"),
-                            "\n!! 运行时反复退出，放弃自动重启。请打开日志面板看原因。\n");
+                            "\n!! 运行时反复退出，放弃自动重启。打开日志面板看原因。\n");
                     stopSelf();
                 }
             }
@@ -371,11 +430,10 @@ public class FoliaService extends Service {
         proc = null;
         if (p != null) {
             try {
-                p.destroy();     // entry.js 会顺带收掉它派生的两个 node
+                p.destroy();     // entry.js 收到 SIGTERM 会先收掉两个子进程
             } catch (Throwable ignored) {
             }
             try {
-                // 给 1 秒体面退出，再强杀
                 final Process fp = p;
                 Thread t = new Thread(new Runnable() {
                     @Override
@@ -394,6 +452,11 @@ public class FoliaService extends Service {
                 t.start();
             } catch (Throwable ignored) {
             }
+        }
+        // 没有句柄说明是上一条链的残留，直接清；有句柄的让 entry.js 自己收尾，
+        // 漏掉的会在下次启动时被 launchDirect 清掉
+        if (p == null) {
+            killOrphans();
         }
     }
 
@@ -436,12 +499,6 @@ public class FoliaService extends Service {
         } else {
             stopForeground(true);
         }
-    }
-
-    // ---------------------------------------------------------------- 小工具
-
-    private void toastLog(String s) {
-        Log.w(TAG, s);
     }
 
     private void writeLog(File f, String s) {

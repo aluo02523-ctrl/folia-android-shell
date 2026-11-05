@@ -33,14 +33,11 @@ import android.widget.Toast;
 import java.io.File;
 
 /**
- * Folia 安卓启动器 · v0.2「只有 Folia」
+ * 全屏壳：只放一个 WebView，其余全部藏起来。
  *
- * 设计原则：屏幕上除了 Folia 本身，什么都不要。
- *   - 没有标题栏、没有状态条、没有底部 Tab、连状态栏和导航栏都隐掉（沉浸式）
- *   - 终端控制台是"藏起来的面板"：从屏幕最顶边往下拉（或点一下顶边）才出现
- *   - 服务起来了会自动把面板收回去，继续全屏听歌
- *
- * 技术约束（保持上一版）：零第三方依赖、Java 8、不用 Fragment。
+ * - 沉浸式，不画标题栏、状态栏、导航栏
+ * - 日志面板从屏幕顶边下拉（或点一下顶边）才出现，服务起来后自动收起
+ * - 零第三方依赖、Java 8、不用 Fragment
  */
 public class MainActivity extends Activity implements View.OnClickListener {
 
@@ -84,7 +81,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private boolean lastLoadFailed = false;
     /** 恢复重试计数，别死循环 */
     private int recoverTries = 0;
-    /** 已经替用户喊过一次 Termux 启动了 */
+    /** 已经替用户重拉过一次运行时 */
     private boolean autoStartAsked = false;
 
     private final Runnable ticker = new Runnable() {
@@ -138,7 +135,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         setupWebView();
         ui.post(ticker);
 
-        // 第一次打开：先把随包带的 rootfs / node / 网页摊到应用私有目录
+        // 第一次打开：先把随包带的 node、动态库、网页摊到应用私有目录
         if (!EmbeddedRuntime.isInstalled(this)) {
             startInstall();
         } else {
@@ -147,6 +144,19 @@ public class MainActivity extends Activity implements View.OnClickListener {
     }
 
     // ---------------------------------------------------------------- WebView
+
+    /** 只有本机的两个 host 算"自己人"，其余一律丢给系统浏览器 */
+    private static boolean isLocalUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        Uri u = Uri.parse(url);
+        if (!"http".equals(u.getScheme())) {
+            return false;
+        }
+        String host = u.getHost();
+        return "127.0.0.1".equals(host) || "localhost".equals(host);
+    }
 
     private void setupWebView() {
         // 注意：这里故意不 loadUrl。
@@ -172,7 +182,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                if (url != null && (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost"))) {
+                // 认 host，不认前缀：http://127.0.0.1.evil.com 也以 http://127.0.0.1 开头
+                if (isLocalUrl(url)) {
                     return false;
                 }
                 try {
@@ -271,7 +282,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         }
     }
 
-    /** 页面没加载成功时的自愈：等服务起来 → 重新加载；服务没起 → 顺手让 Termux 拉起来 */
+    /** 页面没加载成功时的自愈：端口通了就重载，没通就把内置运行时拉起来 */
     private final Runnable recover = new Runnable() {
         @Override
         public void run() {
@@ -282,7 +293,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 return;                    // 试够了就停，别一直转
             }
             recoverTries++;
-            if (PortProbe.alive(3000)) {
+            if (PortProbe.isOpen(3000)) {
                 lastLoadFailed = false;
                 // 前两次用 127.0.0.1，再失败就换 localhost 试试（有些 ROM 只隔离其中一个）
                 String url = recoverTries <= 2 ? URL_FOLIA : URL_FOLIA_LOCALHOST;
@@ -429,8 +440,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final boolean web = PortProbe.alive(3000);
-                final boolean api = PortProbe.alive(4000);
+                final boolean web = PortProbe.isOpen(3000);
+                final boolean api = PortProbe.isOpen(4000);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -443,6 +454,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     private void applyStatus(boolean web, boolean api) {
         boolean wasWeb = webAlive;
+        boolean changed = web != webAlive || api != apiAlive;
         webAlive = web;
         apiAlive = api;
 
@@ -459,7 +471,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
             }
         }
 
-        if (web != webAlive) {
+        if (changed) {
             DiagLog.line(this, "probe", "Java 侧探测 3000=" + web + " 4000=" + api);
         }
         // 端口通了、页面还没成功加载过 → 加载一次（用 loadingPage 防止重复触发）
@@ -551,7 +563,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         }
         installOverlay.setVisibility(View.VISIBLE);
         installOverlay.setOnClickListener(null);
-        installText.setText("首次启动：正在展开内置运行时…\n（约 140MB，请别退出）");
+        installText.setText("首次启动：正在展开内置运行时…\n（约 130MB，请别退出）");
         installBar.setProgress(0);
         appendLog("· 首次启动：解压内置运行时\n");
 
@@ -632,8 +644,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         if (!terminalOpen) {
             goImmersive();
         }
-        // ★ v0.3 关键修复：之前 onPause 里 webView.onPause() 了却从没配对唤醒，
-        //   切后台再回来画面就冻在半渲染状态（白屏/卡帧）。这里必须 onResume + resumeTimers。
+        // 切后台再回来必须配对唤醒：只 onPause 不 onResume，画面会冻在半渲染状态
         if (webView != null) {
             webView.onResume();
             webView.resumeTimers();
@@ -658,8 +669,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     @Override
     protected void onPause() {
         super.onPause();
-        // 注意：这里故意不再调 webView.onPause()。
-        // 这是个音乐播放器，切后台还要继续放；暂停 WebView 会让回来时画面不动。
+        // 故意不调 webView.onPause()：这是音乐播放器，切后台要继续放
     }
 
     @Override
