@@ -1,36 +1,32 @@
 package com.nuonuo.folia;
 
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 /**
- * 端口探活：发一个 GET，只要服务器回了任何 HTTP 响应（哪怕是 404）就算活着。
- * 超时设得短（连接 600ms / 读 900ms），因为这是在本机回环上探测，正常几毫秒就回来了。
+ * 回环端口探活：连得上就算活着。
+ *
+ * 走裸 TCP 而不是 HTTP：本机回环几毫秒就有结果，也不用为每次探测造一个
+ * HttpURLConnection。UI 和看门狗都调这里。
  */
 public final class PortProbe {
+
+    private static final int TIMEOUT_MS = 300;
 
     private PortProbe() {
     }
 
-    public static boolean alive(int port) {
-        HttpURLConnection c = null;
+    public static boolean isOpen(int port) {
+        Socket s = new Socket();
         try {
-            URL u = new URL("http://127.0.0.1:" + port + "/");
-            c = (HttpURLConnection) u.openConnection();
-            c.setConnectTimeout(600);
-            c.setReadTimeout(900);
-            c.setRequestMethod("GET");
-            c.setInstanceFollowRedirects(false);
-            int code = c.getResponseCode();
-            return code > 0;
+            s.connect(new InetSocketAddress("127.0.0.1", port), TIMEOUT_MS);
+            return true;
         } catch (Throwable t) {
             return false;
         } finally {
-            if (c != null) {
-                try {
-                    c.disconnect();
-                } catch (Throwable ignored) {
-                }
+            try {
+                s.close();
+            } catch (Throwable ignored) {
             }
         }
     }

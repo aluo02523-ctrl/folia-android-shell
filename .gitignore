@@ -1,10 +1,7 @@
 # 构建产物
 build/
-build-ws/
-assets/
 *.apk
 *.idsig
-*.apk.idsig
 
 # 运行时与依赖（都靠脚本现生成）
 payload/api/

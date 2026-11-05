@@ -1,19 +1,14 @@
 'use strict';
-// ============================================================
-// 网易云 API 的启动包装
+// 接口层（:4000）的启动包装。
 //
-// 为什么不直接 `node app.js`：原版 app.js 会
-//   ① 同步去 npm 查版本（没网就卡住）
-//   ② 无条件重新注册匿名 token
-// 这两件事在离线/弱网下会把启动拖死。这里自己调用 serveNcmApi，
-// 把版本检查关掉，匿名 token 用"有网就更新，没网就算了"的方式做。
-// ============================================================
+// 不直接 `node app.js`：原版启动会同步查 npm 版本、无条件重注册匿名 token，
+// 弱网下能把启动拖死。这里关掉版本检查，token 改成"有网就更新，没网就算"。
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { resolveApiDir } = require('./lib/find-api.js');
 
-const API_DIR = path.join(__dirname, 'api', 'node_modules', '@neteasecloudmusicapienhanced', 'api');
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = '127.0.0.1';
 
@@ -21,11 +16,8 @@ function log() {
   console.log.apply(console, ['[api-entry]'].concat(Array.prototype.slice.call(arguments)));
 }
 
-async function prepareToken() {
-  const tmp = os.tmpdir();
-  const tokenFile = path.join(tmp, 'anonymous_token');
-  // 临时目录不一定可写（比如 TMPDIR 指到了别人家的目录）——写不了就跳过，
-  // 绝不能因此把整个 API 拖死
+async function prepareToken(apiDir) {
+  const tokenFile = path.join(os.tmpdir(), 'anonymous_token');
   try {
     if (!fs.existsSync(tokenFile)) {
       fs.writeFileSync(tokenFile, '', 'utf-8');
@@ -35,8 +27,7 @@ async function prepareToken() {
     return;
   }
   try {
-    // generateConfig 会联网注册匿名 token 并设好 global.cnIp；没网就 20 秒后放弃
-    const gen = require(path.join(API_DIR, 'generateConfig.js'));
+    const gen = require(path.join(apiDir, 'generateConfig.js'));
     await Promise.race([
       Promise.resolve(gen()).catch(function (e) {
         log('生成配置失败（不影响启动）:', e && e.message);
@@ -52,11 +43,23 @@ async function prepareToken() {
 }
 
 (async function main() {
-  // API 的模块都用相对路径 require，切进去最省心
-  process.chdir(API_DIR);
-  await prepareToken();
+  const apiDir = resolveApiDir(__dirname);
+  if (!apiDir) {
+    console.error(
+      '[api-entry] 找不到接口层。期望其中一个：\n  ' +
+        path.join(__dirname, 'api', 'node_modules', '@neteasecloudmusicapienhanced', 'api') +
+        '\n  ' +
+        path.join(__dirname, 'api')
+    );
+    process.exit(1);
+  }
+  log('接口层目录:', apiDir);
 
-  const server = require(path.join(API_DIR, 'server.js'));
+  // 接口层的模块都用相对路径 require，切进去最省心
+  process.chdir(apiDir);
+  await prepareToken(apiDir);
+
+  const server = require(path.join(apiDir, 'server.js'));
   await server.serveNcmApi({ port: PORT, host: HOST, checkVersion: false });
   log('网易云 API 已就绪 http://' + HOST + ':' + PORT);
 })().catch(function (e) {

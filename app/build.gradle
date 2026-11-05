@@ -2,21 +2,24 @@ plugins {
     id 'com.android.application'
 }
 
+// 版本号只认 version.properties，和 build.sh 同源
+def props = new Properties()
+file("$rootDir/version.properties").withInputStream { props.load(it) }
+
 android {
     namespace 'com.nuonuo.folia'
     compileSdk 34
 
     defaultConfig {
         applicationId 'com.nuonuo.folia'
-        minSdk 26
-        targetSdk 34
-        versionCode 3
-        versionName '0.3'
+        minSdk props['MIN_SDK'] as int
+        targetSdk props['TARGET_SDK'] as int
+        versionCode props['VERSION_CODE'] as int
+        versionName props['VERSION_NAME']
     }
 
     buildTypes {
         debug {
-            // 装在自己手机上，debug 签名就够
         }
         release {
             minifyEnabled false
