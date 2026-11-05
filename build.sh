@@ -66,8 +66,10 @@ fi
 [ -n "$AAPT2" ] || die "没有可用的 aapt2（Termux：pkg install aapt2）"
 
 command -v javac >/dev/null 2>&1 || die "没有 javac（Termux：pkg install openjdk-17）"
-command -v python3 >/dev/null 2>&1 || die "没有 python3"
 command -v keytool >/dev/null 2>&1 || die "没有 keytool"
+# Termux 的包叫 python，不一定有 python3 这个名字
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] || die "没有 python（Termux：pkg install python）"
 
 D8_JAR="$BT_DIR/lib/d8.jar"
 APKSIGNER_JAR="$BT_DIR/lib/apksigner.jar"
@@ -99,7 +101,7 @@ if [ "$MODE" = build ]; then
 
     mkdir -p "$OUT/assets"
     say "① 打包 assets（运行时 + 网页 + 接口层）"
-    python3 "$ROOT/tools/make_assets.py" "$NATIVE_DIR" "$APP_PAYLOAD_DIR" "$OUT/assets"
+    "$PY" "$ROOT/tools/make_assets.py" "$NATIVE_DIR" "$APP_PAYLOAD_DIR" "$OUT/assets"
 fi
 
 # ------------------------------------------------------------ 资源
@@ -173,7 +175,7 @@ say "⑥ 对齐 + 签名"
 PACK_OK=0
 for attempt in 1 2 3; do
     rm -f "$OUT/aligned.apk" "$APK_FINAL"
-    if python3 "$ROOT/tools/align.py" "$OUT/unsigned.apk" "$OUT/dex/classes.dex" "$OUT/aligned.apk" > "$OUT/align.log" 2>&1 &&
+    if "$PY" "$ROOT/tools/align.py" "$OUT/unsigned.apk" "$OUT/dex/classes.dex" "$OUT/aligned.apk" > "$OUT/align.log" 2>&1 &&
         java -jar "$APKSIGNER_JAR" sign \
             --ks "$KS" --ks-pass pass:android --key-pass pass:android \
             --ks-key-alias androiddebugkey \

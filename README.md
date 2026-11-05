@@ -111,6 +111,7 @@ payload/
   lib/find-api.js        接口层目录探测
   test/                  node --test 单测
 tools/
+  build-termux.sh        一键：补工具 → 下 SDK → 备 payload → 调 build.sh
   align.py               替代 zipalign（官方版是 x86_64，手机上跑不了）
   make_assets.py         把运行时和网页打成 assets
   test_make_assets.py    清单字节数的回归测试
@@ -124,33 +125,33 @@ docs/
 
 ## 构建
 
-不需要 Gradle，也不需要电脑 —— 一台装了 Termux 的手机就够：
+一台装了 Termux 的手机就够，一条命令：
 
 ```bash
-# 1. 工具链
-pkg install openjdk-17 aapt2 python3 unzip
+# 前端源码（只需要一次）
+git clone https://github.com/chthollyphile/folia-major ~/folia-major
 
-# 2. 运行时（从 Termux 自己这份复制；必须是 arm64）
-mkdir -p ~/folia-payload/native/bin ~/folia-payload/native/lib
-cp $PREFIX/bin/node ~/folia-payload/native/bin/
-cp $PREFIX/lib/libicu*.so* $PREFIX/lib/libcrypto.so.3 $PREFIX/lib/libssl.so.3 \
-   $PREFIX/lib/libc++_shared.so $PREFIX/lib/libcares.so $PREFIX/lib/libffi.so \
-   $PREFIX/lib/libsqlite3.so $PREFIX/lib/libz.so.1 ~/folia-payload/native/lib/
-
-# 3. 网页与接口层
-mkdir -p ~/folia-payload/app
-cp payload/*.js ~/folia-payload/app/
-cp -r payload/lib ~/folia-payload/app/
-(cd /path/to/folia-major && npx vite build) && cp -r /path/to/folia-major/dist ~/folia-payload/app/web
-
-# 接口层放这里（package 自带的依赖要一起拷）
-mkdir -p ~/folia-payload/app/api/node_modules/@neteasecloudmusicapienhanced
-cp -r /path/to/folia-major/node_modules/@neteasecloudmusicapienhanced/api \
-      ~/folia-payload/app/api/node_modules/@neteasecloudmusicapienhanced/
-
-# 4. 打包
-NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build.sh
+bash tools/build-termux.sh
 # → build/Folia-<版本>-debug.apk
+```
+
+脚本会补齐工具（openjdk-17 / aapt2 / node / python）、只在缺的时候下载 SDK 的
+3 个 jar（`android.jar`、`d8.jar`、`apksigner.jar`，约 120 MB，走腾讯镜像，
+缓存在 `~/.cache/folia-sdk`），再算 `node` 的真实依赖、拼好 payload，最后调 `build.sh`。
+
+```
+--folia DIR     Folia 源码目录，默认 ~/folia-major
+--out DIR       payload 目录，默认 ~/folia-payload
+--web DIST      已经 build 好的 dist（跳过 vite build）
+--api DIR       已经装好的接口层（要含 server.js）
+--skip-deps     不装包
+--skip-sdk      SDK 已经齐了
+```
+
+已经自己备好 payload 的话，也可以只跑打包：
+
+```bash
+NATIVE_DIR=~/folia-payload/native APP_PAYLOAD_DIR=~/folia-payload/app bash build.sh
 ```
 
 只想确认代码还能编译（不需要那 130 MB，CI 就是这么跑的）：
