@@ -113,6 +113,7 @@ payload/
 tools/
   build-termux.sh        一键：补工具 → 下 SDK → 备 payload → 调 build.sh
   align.py               替代 zipalign（官方版是 x86_64，手机上跑不了）
+  collect-libs.py        按 ELF 的 DT_NEEDED 收 node 的依赖（每库一份，不靠 ldd）
   make_assets.py         把运行时和网页打成 assets
   test_make_assets.py    清单字节数的回归测试
 build.sh                 打包：aapt2 → javac → d8 → 对齐 → 签名（--compile-only 只编译）

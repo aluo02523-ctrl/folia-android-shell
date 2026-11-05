@@ -55,8 +55,6 @@ if [ "$SKIP_DEPS" = 0 ]; then
     need aapt2 || PKGS+=(aapt2)
     need node || PKGS+=(nodejs)
     need curl || PKGS+=(curl)
-    # ldd 用来算 node 的真实依赖；没有它就退回固定清单
-    need ldd || PKGS+=(binutils)
     [ -n "$PY" ] || PKGS+=(python)
     if [ ${#PKGS[@]} -gt 0 ]; then
         # 去重
@@ -161,40 +159,25 @@ export ANDROID_HOME="$SDK"
 
 say "③ 备运行时（$PAYLOAD/native）"
 NATIVE="$PAYLOAD/native"
-mkdir -p "$NATIVE/bin" "$NATIVE/lib"
+mkdir -p "$NATIVE/bin"
+# 先清空：上一次构建留下的库（包括重复的 libicu）不然还会被打进去
+rm -rf "$NATIVE/lib"
+mkdir -p "$NATIVE/lib"
 cp -f "$PREFIX/bin/node" "$NATIVE/bin/node"
 chmod 755 "$NATIVE/bin/node"
-# node 必须是真 ELF，不能是包装脚本（那种拷进包里跑不起来）
-"$PY" - "$NATIVE/bin/node" <<'PY' || die "$PREFIX/bin/node 不是 ELF 可执行文件"
-import sys
-with open(sys.argv[1], "rb") as f:
-    sys.exit(0 if f.read(4) == b"\x7fELF" else 1)
-PY
+# node 必须是真 ELF，不能是包装脚本
+"$PY" -c 'import sys; sys.exit(0 if open(sys.argv[1],"rb").read(4)==b"\x7fELF" else 1)' \
+    "$NATIVE/bin/node" || die "$PREFIX/bin/node 不是 ELF 可执行文件"
 
-# 用 ldd 算真实依赖，比手写清单可靠；只拷 $PREFIX 下的库
-DEPS="$(ldd "$PREFIX/bin/node" 2>/dev/null |
-    awk '$2 == "=>" && $3 ~ /^\/data\/data\/com\.termux/ {print $1 "\t" $3}' || true)"
-COPIED=0
-if [ -n "$DEPS" ]; then
-    while IFS=$'\t' read -r name path; do
-        [ -n "$name" ] && [ -f "$path" ] || continue
-        cp -f "$path" "$NATIVE/lib/$name"
-        COPIED=$((COPIED + 1))
-    done <<<"$DEPS"
-fi
+# 按 DT_NEEDED 递归收依赖：每个 soname 一份，不跟通配符，也不依赖 ldd
+"$PY" "$ROOT/tools/collect-libs.py" "$NATIVE/bin/node" "$PREFIX/lib" "$NATIVE/lib" \
+    || die "收集 node 依赖失败"
 
-if [ "$COPIED" -eq 0 ]; then
-    warn "ldd 没结果，退回固定清单"
-    for p in "$PREFIX"/lib/libicu*.so* "$PREFIX"/lib/libcrypto.so.3 "$PREFIX"/lib/libssl.so.3 \
-        "$PREFIX"/lib/libc++_shared.so "$PREFIX"/lib/libcares.so* "$PREFIX"/lib/libffi.so* \
-        "$PREFIX"/lib/libsqlite3.so* "$PREFIX"/lib/libz.so*; do
-        [ -f "$p" ] && cp -f "$p" "$NATIVE/lib/" || true
-    done
-fi
-
-echo "    node $(du -h "$NATIVE/bin/node" | cut -f1)，依赖 ${COPIED:-若干} 个：$(du -sh "$NATIVE/lib" | cut -f1)"
-for must in libc++_shared.so libssl.so.3 libcrypto.so.3; do
-    [ -e "$NATIVE/lib/$must" ] || warn "缺 $must，node 可能起不来"
+LIBS="$(ls -1 "$NATIVE/lib" | wc -l | tr -d ' ')"
+[ "$LIBS" -gt 0 ] || die "一个依赖都没收集到，检查 $PREFIX/lib"
+echo "    node $(du -h "$NATIVE/bin/node" | cut -f1)，依赖 $LIBS 个：$(du -sh "$NATIVE/lib" | cut -f1)"
+for must in libc++_shared.so libssl.so.3 libcrypto.so.3 libicudata.so.78; do
+    [ -e "$NATIVE/lib/$must" ] || warn "没收集到 $must（版本可能不同，看 node 能不能起来）"
 done
 
 # ------------------------------------------------------------ 应用

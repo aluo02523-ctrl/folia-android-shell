@@ -88,7 +88,7 @@ say "javac         : $(javac -version 2>&1)"
 say "模式          : $MODE"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/gen" "$OUT/classes"
+mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
 
 if [ "$MODE" = build ]; then
     [ -f "$D8_JAR" ] || die "缺 d8.jar：$D8_JAR"
@@ -160,9 +160,15 @@ java -cp "$D8_JAR" com.android.tools.r8.D8 \
 
 # ------------------------------------------------------------ 对齐 + 签名
 
-KS="$ROOT/debug.keystore"
+# 签名证书要跨仓库目录复用，否则换个 checkout 构建就是新签名，覆盖安装会失败
+KS="${FOLIA_KEYSTORE:-$ROOT/debug.keystore}"
 if [ ! -f "$KS" ]; then
-    echo "    生成 debug 签名证书..."
+    KS="$HOME/.folia/debug.keystore"
+    mkdir -p "$(dirname "$KS")"
+fi
+if [ ! -f "$KS" ]; then
+    echo "    生成签名证书 → $KS"
+    echo "    （要沿用旧签名：把旧的 debug.keystore 拷到这个路径）"
     keytool -genkeypair -v \
         -keystore "$KS" -storepass android -keypass android \
         -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
