@@ -74,6 +74,8 @@ PY="$(command -v python3 || command -v python || true)"
 D8_JAR="$BT_DIR/lib/d8.jar"
 APKSIGNER_JAR="$BT_DIR/lib/apksigner.jar"
 
+APKSIGNER=()
+
 # 给 aapt2 link 用的 android.jar，默认和 javac 同一份。
 # Ubuntu 自带的 aapt2 2.19 读不了新格式，那种机器上要指到旧的 api-23。
 FRAMEWORK_JAR="${FRAMEWORK_JAR:-$ANDROID_JAR}"
@@ -93,6 +95,15 @@ mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
 if [ "$MODE" = build ]; then
     [ -f "$D8_JAR" ] || die "缺 d8.jar：$D8_JAR"
     [ -f "$APKSIGNER_JAR" ] || die "缺 apksigner.jar：$APKSIGNER_JAR"
+
+    # 有的 JDK（Termux 的 openjdk-17 见过）用 -jar 跑 apksigner 会把 jar 路径当成
+    # 子命令，报 "Unsupported command: .../apksigner.jar"。两种调用都试一遍。
+    if java -jar "$APKSIGNER_JAR" --help >/dev/null 2>&1; then
+        APKSIGNER=(java -jar "$APKSIGNER_JAR")
+    elif java -cp "$APKSIGNER_JAR" com.android.apksigner.ApkSignerTool --help >/dev/null 2>&1; then
+        APKSIGNER=(java -cp "$APKSIGNER_JAR" com.android.apksigner.ApkSignerTool)
+    fi
+    [ ${#APKSIGNER[@]} -gt 0 ] || die "apksigner 跑不起来（-jar / -cp 都不行）：$APKSIGNER_JAR"
 
     NATIVE_DIR="${NATIVE_DIR:-$HOME/folia-payload/native}"
     APP_PAYLOAD_DIR="${APP_PAYLOAD_DIR:-$HOME/folia-payload/app}"
@@ -182,7 +193,7 @@ PACK_OK=0
 for attempt in 1 2 3; do
     rm -f "$OUT/aligned.apk" "$APK_FINAL"
     if "$PY" "$ROOT/tools/align.py" "$OUT/unsigned.apk" "$OUT/dex/classes.dex" "$OUT/aligned.apk" > "$OUT/align.log" 2>&1 &&
-        java -jar "$APKSIGNER_JAR" sign \
+        "${APKSIGNER[@]}" sign \
             --ks "$KS" --ks-pass pass:android --key-pass pass:android \
             --ks-key-alias androiddebugkey \
             --out "$APK_FINAL" "$OUT/aligned.apk" > "$OUT/sign.log" 2>&1; then
@@ -196,7 +207,7 @@ done
 [ "$PACK_OK" = 1 ] || die "对齐/签名连续失败 3 次，看 $OUT/align.log 和 $OUT/sign.log"
 
 say "⑦ 校验签名"
-java -jar "$APKSIGNER_JAR" verify --print-certs "$APK_FINAL" | head -6
+"${APKSIGNER[@]}" verify --print-certs "$APK_FINAL" | head -6
 
 ls -lh "$APK_FINAL"
 say "完成 ✅  $APK_FINAL"
