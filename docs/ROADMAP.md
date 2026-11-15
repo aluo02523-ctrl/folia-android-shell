@@ -11,6 +11,7 @@
 - [x] 孤儿进程清理：`.pids` + 启动前杀残留，避免端口被占、看门狗挂空
 - [x] 两个子服务各自写日志（`logs/api.log` / `logs/web.log`），面板一起 tail
 - [x] 本地文件入口：`<input type="file">` 走 SAF（持久授权），下载链接落 App 私有目录
+- [x] 锁屏/通知栏控制：注入脚本钩 `<audio>`，桥到 MediaSession（封面、进度、上一首/下一首、耳机线控）
 - [x] 离线构建链：`aapt2 → javac → d8 → align.py → apksigner`，不依赖 Gradle
 - [x] 构建脚本合并成一份 `build.sh`，带 `--compile-only`（CI 不需要 130MB 运行时就能验编译）
 - [x] 版本号单一来源 `version.properties`（脚本和 Gradle 共用）
@@ -26,7 +27,6 @@
 | 首次启动慢 | 需要解压约 130 MB 运行时，中端机约 20–40 秒，之后秒开 |
 | 只支持 arm64 | 运行时用的是 arm64 的 node 与 `.so` |
 | 音源需要自备 | 内置的是第三方接口实现，收费/版权曲目可能返回空 |
-| 没有后台播放的锁屏控制 | WebView 音频能继续播，但没有 MediaSession 卡片 |
 | App 内的 loopback 与外部隔离 | 同一台机器上别的 App 连不进 `127.0.0.1:3000`，属正常现象 |
 
 ## 想做的

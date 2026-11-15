@@ -141,6 +141,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         appendLog("· 应用:   " + appDir.getAbsolutePath() + "\n");
 
         setupWebView();
+        FoliaService.bindHost(this);
         ui.post(ticker);
 
         // 第一次打开：先把随包带的 node、动态库、网页摊到应用私有目录
@@ -187,6 +188,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         s.setMediaPlaybackRequiresUserGesture(false);   // 音乐播放器必须
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
 
+        w.addJavascriptInterface(new Bridge(), "FoliaBridge");
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
@@ -218,6 +220,11 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 loadingPage = false;
                 lastLoadFailed = false;
                 recoverTries = 0;
+                // 页面就绪后装播放状态桥；重建 WebView 也会走到这里
+                String js = mediaJs();
+                if (js.length() > 0) {
+                    v.evaluateJavascript(js, null);
+                }
                 if (terminalOpen) {
                     appendLog("· 页面加载完成\n");
                 }
@@ -316,6 +323,62 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 appendLog("! 重建 WebView 失败: " + t + "\n");
             }
         }
+    }
+
+    // ---------------------------------------------------------------- 播放状态桥
+
+    /** 页面里每秒推一次状态；挂在这里只是为了让 JS 能调进来 */
+    public class Bridge {
+        @android.webkit.JavascriptInterface
+        public void state(String payload) {
+            String url = webView == null ? null : webView.getUrl();
+            if (url == null || !isLocalUrl(url)) {
+                return;   // 只认自己的页面，别让别处的 JS 摸到
+            }
+            FoliaService.onWebState(payload);
+        }
+    }
+
+    /** 注入脚本缓存（res/raw/media_bridge.js） */
+    private String mediaJs;
+
+    private String mediaJs() {
+        if (mediaJs != null) {
+            return mediaJs;
+        }
+        try {
+            java.io.InputStream in = getResources().openRawResource(R.raw.media_bridge);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = in.read(buf)) > 0) {
+                bos.write(buf, 0, r);
+            }
+            in.close();
+            mediaJs = new String(bos.toByteArray(), "UTF-8");
+        } catch (Throwable t) {
+            DiagLog.line(this, "media", "读注入脚本失败 " + t);
+            mediaJs = "";
+        }
+        return mediaJs;
+    }
+
+    /** 锁屏/通知栏的指令 → 页面 */
+    void evalMediaCommand(String cmd, long value) {
+        if (!"play".equals(cmd) && !"pause".equals(cmd) && !"toggle".equals(cmd)
+                && !"seek".equals(cmd) && !"next".equals(cmd) && !"prev".equals(cmd)) {
+            return;
+        }
+        final String js = "window.__foliaMediaCmd && window.__foliaMediaCmd('"
+                + cmd + "'," + value + ")";
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                if (webView != null) {
+                    webView.evaluateJavascript(js, null);
+                }
+            }
+        });
     }
 
     /** 按页面给的 accept / 多选拼一个 SAF 的 ACTION_OPEN_DOCUMENT */
@@ -814,6 +877,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     @Override
     protected void onDestroy() {
+        FoliaService.unbindHost(this);
         ui.removeCallbacks(ticker);
         if (fileChooserCallback != null) {
             fileChooserCallback.onReceiveValue(null);

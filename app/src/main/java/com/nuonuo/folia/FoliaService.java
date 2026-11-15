@@ -7,7 +7,9 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.system.Os;
 import android.system.OsConstants;
 import android.util.Log;
@@ -17,6 +19,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,10 +34,17 @@ public class FoliaService extends Service {
     private static final String TAG = "FoliaService";
     private static final String CHANNEL_ID = "folia-runtime";
     private static final int NOTIF_ID = 1;
+    /** 通知栏/锁屏按钮的 action 前缀，后面接 play/pause/next/prev */
+    private static final String ACTION_MEDIA = "com.nuonuo.folia.action.MEDIA:";
     /** entry.js 写下的进程清单：每行「名字 pid」 */
     private static final String PID_FILE = ".pids";
     private static final int MAX_LOG_BYTES = 1024 * 1024;
 
+    private static WeakReference<FoliaService> INSTANCE;
+    private static WeakReference<MainActivity> HOST;
+    private final Handler main = new Handler(Looper.getMainLooper());
+
+    private MediaSessionHost media;
     private volatile Process proc;
     private Thread watchdog;
     private volatile boolean stopping = false;
@@ -50,11 +60,22 @@ public class FoliaService extends Service {
     public void onCreate() {
         super.onCreate();
         createChannel();
+        INSTANCE = new WeakReference<FoliaService>(this);
+        media = new MediaSessionHost(this);
+        media.start();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+
+        // 锁屏/通知栏按下的按钮
+        if (action != null && action.startsWith(ACTION_MEDIA)) {
+            if (media != null) {
+                media.command(action.substring(ACTION_MEDIA.length()), 0);
+            }
+            return START_STICKY;
+        }
 
         if (EmbeddedRuntime.ACTION_STOP.equals(action)) {
             stopping = true;
@@ -65,7 +86,7 @@ public class FoliaService extends Service {
         }
 
         // startForeground 必须在几秒内调用
-        startForeground(NOTIF_ID, buildNotification(isRunning() ? "Folia 运行中" : "Folia 启动中…"));
+        startForeground(NOTIF_ID, buildNotification());
 
         if (!EmbeddedRuntime.isInstalled(this)) {
             Log.e(TAG, "还没解压完，不能启动");
@@ -94,6 +115,11 @@ public class FoliaService extends Service {
     public void onDestroy() {
         stopping = true;
         killRuntime();
+        if (media != null) {
+            media.stop();
+            media = null;
+        }
+        INSTANCE = null;
         super.onDestroy();
     }
 
@@ -476,7 +502,7 @@ public class FoliaService extends Service {
         nm.createNotificationChannel(ch);
     }
 
-    private Notification buildNotification(String text) {
+    private Notification buildNotification() {
         PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
         Notification.Builder b;
@@ -485,12 +511,94 @@ public class FoliaService extends Service {
         } else {
             b = new Notification.Builder(this);
         }
-        b.setContentTitle("Folia")
+
+        String title = media != null && media.title() != null && media.title().length() > 0
+                ? media.title() : "Folia";
+        String text;
+        if (media != null && media.subtitle() != null && media.subtitle().length() > 0) {
+            text = media.subtitle();
+        } else {
+            text = media != null && media.isPlaying() ? "正在播放" : "Folia 运行中";
+        }
+
+        b.setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setOngoing(true)
+                .setShowWhen(false)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setContentIntent(pi);
+
+        // 没有 MediaStyle + session token，Android 11+ 的通知栏不会出播放器
+        if (media != null && media.token() != null) {
+            boolean playing = media.isPlaying();
+            Notification.MediaStyle style = new Notification.MediaStyle();
+            style.setMediaSession(media.token());
+            style.setShowActionsInCompactView(0, 1, 2);
+            b.setStyle(style);
+            b.addAction(action(android.R.drawable.ic_media_previous, "上一首", "prev"));
+            b.addAction(action(playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                    playing ? "暂停" : "播放", "toggle"));
+            b.addAction(action(android.R.drawable.ic_media_next, "下一首", "next"));
+        }
         return b.build();
+    }
+
+    private Notification.Action action(int icon, String title, String cmd) {
+        Intent i = new Intent(this, FoliaService.class).setAction(ACTION_MEDIA + cmd);
+        PendingIntent pi = PendingIntent.getService(this, cmd.hashCode(), i,
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+        return new Notification.Action.Builder(icon, title, pi).build();
+    }
+
+    /** 状态变化时重建常驻通知（曲名/封面/播放图标） */
+    void showMediaNotification() {
+        try {
+            startForeground(NOTIF_ID, buildNotification());
+        } catch (Throwable t) {
+            DiagLog.line(this, "media", "更新通知失败 " + t);
+        }
+    }
+
+    void onMain(Runnable r) {
+        main.post(r);
+    }
+
+    // ---------------------------------------------------------------- 与页面互通
+
+    static void bindHost(MainActivity a) {
+        HOST = new WeakReference<MainActivity>(a);
+    }
+
+    static void unbindHost(MainActivity a) {
+        MainActivity cur = HOST == null ? null : HOST.get();
+        if (cur == null || cur == a) {
+            HOST = null;
+        }
+    }
+
+    /** 页面推来的播放状态，切到主线程再动 MediaSession */
+    static void onWebState(final String payload) {
+        FoliaService s = INSTANCE == null ? null : INSTANCE.get();
+        if (s == null) {
+            return;
+        }
+        s.onMain(new Runnable() {
+            @Override
+            public void run() {
+                if (s.media != null) {
+                    s.media.onState(payload);
+                }
+            }
+        });
+    }
+
+    /** 把播放指令送回页面 */
+    static void deliverCommand(String cmd, long value) {
+        MainActivity a = HOST == null ? null : HOST.get();
+        if (a != null) {
+            a.evalMediaCommand(cmd, value);
+        }
     }
 
     private void stopForegroundCompat() {

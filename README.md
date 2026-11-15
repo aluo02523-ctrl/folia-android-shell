@@ -177,7 +177,7 @@ python3 -m unittest discover -s tools -p 'test_*.py'
 | 首次启动慢 | 要解压约 130 MB，20–40 秒，之后秒开 |
 | 只有 arm64 | 运行时是 arm64 的 node 与 `.so` |
 | 音源自备 | 接口层是第三方实现，收费/版权曲目可能返回空 |
-| 无锁屏控制 | 后台能继续播，但没有 MediaSession 卡片 |
+| 上一首/下一首靠猜 DOM | 页面没标准按钮时按 aria/class 试探，可能不生效；播放/暂停/进度是可靠的 |
 
 ## 关于分发
 
