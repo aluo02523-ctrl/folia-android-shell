@@ -5,6 +5,12 @@
 (function () {
   if (window.__foliaHooked) return;
   window.__foliaHooked = true;
+  console.log('[bridge] injected, FoliaBridge=' + (typeof window.FoliaBridge));
+  if (!window.FoliaBridge) {
+    setTimeout(function () {
+      console.log('[bridge] retry, FoliaBridge=' + (typeof window.FoliaBridge));
+    }, 1500);
+  }
 
   var el = null;
 
@@ -47,15 +53,26 @@
             m && !m.paused ? 1 : 0, pos, dur].join('\u0001');
   }
 
+  var pushFailed = false;
+
   function report() {
     try {
-      if (window.FoliaBridge && window.FoliaBridge.state) {
+      if (window.FoliaBridge && typeof window.FoliaBridge.state === 'function') {
         window.FoliaBridge.state(info());
+      } else if (!pushFailed) {
+        pushFailed = true;
+        console.log('[bridge] no state(): ' + Object.keys(window.FoliaBridge || {}).join(','));
       }
     } catch (e) {
-      // 桥没装好就算了，别影响播放
+      if (!pushFailed) {
+        pushFailed = true;
+        console.log('[bridge] push failed: ' + e);
+      }
     }
   }
+
+  // 给 App 轮询用：不依赖 JS 接口，返回一行状态
+  window.__foliaState = info;
 
   function adopt(e) {
     var t = e.target;

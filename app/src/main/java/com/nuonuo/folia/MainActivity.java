@@ -92,6 +92,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private boolean autoStartAsked = false;
     /** 正在等用户选文件；回调只能回一次，所以得留着 */
     private ValueCallback<Uri[]> fileChooserCallback;
+    private boolean bridgeLogged = false;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -99,6 +100,9 @@ public class MainActivity extends Activity implements View.OnClickListener {
             drainLogs();
             if (tick % 4 == 0) {
                 probePortsAsync();
+            }
+            if (tick % 4 == 2) {
+                pollMediaState();
             }
             tick++;
             ui.postDelayed(this, 500);
@@ -224,6 +228,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 recoverTries = 0;
                 // 页面就绪后装播放状态桥；重建 WebView 也会走到这里
                 String js = mediaJs();
+                DiagLog.line(MainActivity.this, "media", "注入桥 " + js.length() + " 字节");
                 if (js.length() > 0) {
                     v.evaluateJavascript(js, null);
                 }
@@ -331,14 +336,62 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     /** 页面里每秒推一次状态；挂在这里只是为了让 JS 能调进来 */
     public class Bridge {
+        /**
+         * 这个回调跑在 WebView 的 "JavaBridge" 线程上，不能碰 WebView 的方法
+         * （getUrl 会抛 "A WebView method was called on thread 'JavaBridge'"），
+         * 所以整段都丢回主线程。
+         */
         @android.webkit.JavascriptInterface
-        public void state(String payload) {
-            String url = webView == null ? null : webView.getUrl();
-            if (url == null || !isLocalUrl(url)) {
-                return;   // 只认自己的页面，别让别处的 JS 摸到
-            }
-            FoliaService.onWebState(payload);
+        public void state(final String payload) {
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!isLocalUrl(webView == null ? null : webView.getUrl())) {
+                        return;
+                    }
+                    onMediaState(payload, "push");
+                }
+            });
         }
+    }
+
+    /**
+     * 主动从页面拉一次状态。
+     *
+     * 主路径用轮询而不是 addJavascriptInterface 推：接口对象在某些机器的
+     * WebView 上能看到但不一定能调，轮询只依赖 evaluateJavascript，稳得多。
+     */
+    private void pollMediaState() {
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript("window.__foliaState ? window.__foliaState() : ''", new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(String v) {
+                if (v == null || v.length() < 3) {
+                    return;
+                }
+                try {
+                    Object o = new org.json.JSONTokener(v).nextValue();
+                    if (o instanceof String) {
+                        onMediaState((String) o, "poll");
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
+    private void onMediaState(String payload, String via) {
+        if (payload == null || payload.length() < 5) {
+            return;
+        }
+        if (!bridgeLogged) {
+            bridgeLogged = true;
+            DiagLog.line(MainActivity.this, "media",
+                    "第一次收到页面状态(" + via + "): " + payload.replace('\u0001', '|'));
+        }
+        FoliaService.onWebState(payload);
     }
 
     /** 注入脚本缓存（res/raw/media_bridge.js） */
