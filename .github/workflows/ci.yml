@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  android:
+    name: 资源 + Java 编译
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # 不打包运行时（130MB），只验资源、清单、R.java 和 Java 编译
+      - run: bash build.sh --compile-only
+
+  shell:
+    name: 脚本语法
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n build.sh
+      - name: shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck --severity=warning build.sh
+
+  node:
+    name: payload 单测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test payload/test/*.test.js
+
+  python:
+    name: 构建工具
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m py_compile tools/*.py
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v

@@ -17,18 +17,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 内置运行时（v1.0「自带 Termux」）
- *
- * 老版本要用户自己装 Termux、自己在 Termux 里跑脚本。现在这套东西全部搬进 APK：
+ * 内置运行时的安装与路径约定。
  *
  *   应用私有目录/
- *     runtime/bin/node          ← 可执行文件
- *     runtime/lib/*.so          ← node 依赖的动态库
- *     app/                      ← 网页、接口层、启动脚本
- *     app/logs/                 ← web.log / api.log / runtime.log
+ *     runtime/bin/node          ← 可执行文件（从 assets 拷出来，chmod 0755）
+ *     runtime/lib/*.so          ← node 的依赖
+ *     app/                      ← 网页、接口层、启动脚本（payload.zip 解开）
+ *     app/logs/                 ← api.log / web.log / runtime.log
  *
- * 为什么不把运行时留在 assets 里直接跑：assets 里的东西没法执行，
- * 必须先解压到应用私有目录，再 chmod 0755（用 Os.chmod，File.setExecutable 不可靠）。
+ * assets 里的东西不能直接执行，必须先解压到 files/ 再 chmod。
  */
 public final class EmbeddedRuntime {
 
@@ -56,10 +53,6 @@ public final class EmbeddedRuntime {
         return new File(appDir(c), "web");
     }
 
-    public static File rootfsDir(Context c) {
-        return new File(c.getFilesDir(), "rootfs");
-    }
-
     public static File runtimeDir(Context c) {
         return new File(c.getFilesDir(), "runtime");
     }
@@ -80,13 +73,11 @@ public final class EmbeddedRuntime {
         return new File(appDir(c), ".installed");
     }
 
-    /** 装好没有（解压完成的标记文件） */
     /**
-     * 装好了吗？
+     * 装好了吗。
      *
-     * 注意：只判断「标记文件存在」是错的 —— 那样升级 APK 后永远不会重新解压，
-     * 新版本里加的 entry.js 之类就永远不会出现在 app 目录里（1.5 就栽在这）。
-     * 所以标记文件里存的是「解压时的版本号」，和当前 versionName 不一致就重装。
+     * 不能只看标记文件在不在：那样升级 APK 后永远不会重新解压，新版 payload 里
+     * 新增的文件就永远到不了 app 目录。标记文件里存 versionName，对不上就重装。
      */
     public static boolean isInstalled(Context c) {
         File m = marker(c);
@@ -189,7 +180,6 @@ public final class EmbeddedRuntime {
 
         File app = appDir(ctx);
         File runtime = runtimeDir(ctx);
-        File rootfs = rootfsDir(ctx);
         File logs = logDir(ctx);
         if (!logs.isDirectory() && !logs.mkdirs()) {
             throw new IOException("建不了日志目录：" + logs);
@@ -226,11 +216,10 @@ public final class EmbeddedRuntime {
             }
         }
 
-        // 2) 网页 + API + 启动脚本
+        // 2) 网页 + 接口层 + 启动脚本
         unzipAsset(ctx, PAYLOAD, app, cb, done, total);
 
-
-        // 4) 标记
+        // 3) 标记
         String ver = "0";
         try {
             ver = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;

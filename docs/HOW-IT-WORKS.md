@@ -14,8 +14,8 @@
               ▼
 ┌───────────────────────────────┐  node 进程（同一个 UID）
 │ payload/entry.js              │  进程总管
-│   ├─ spawn api-entry.js       │
-│   └─ spawn static.js          │
+│   ├─ spawn api-entry.js       │  → logs/api.log
+│   └─ spawn static.js          │  → logs/web.log
 └───────────────────────────────┘
    │                    │
    ▼                    ▼
@@ -24,9 +24,11 @@
 ```
 
 - **为什么要前台服务**：node 一旦被系统回收，音乐就断。常驻通知告诉系统「我在干活」。
-- **为什么让 node 当总管**：App 只需要管一个进程；两个子服务谁挂了，总管退出，
-  看门狗再把整条链拉起来（最多 3 次，防止无限重启）。
+- **为什么让 node 当总管**：App 只盯一个进程；两个子服务谁挂了，总管退出，
+  看门狗再把整条链拉起来（最多 3 次，稳定跑过一分钟就重新计数）。
 - **进程间只走 HTTP**：App 与 node 之间没有别的通道，WebView 就是一个普通客户端。
+- **子进程的输出**：各自写 `logs/api.log` / `logs/web.log`，同时转给总管的 stdout，
+  最终都进 `runtime.log` 和 `diag.log`。
 
 ## 二、文件布局
 
@@ -47,10 +49,13 @@ files/runtime/lib/*.so        ← LD_LIBRARY_PATH 指这里
 files/app/entry.js            进程总管
 files/app/api-entry.js        接口层
 files/app/static.js           静态站
+files/app/lib/find-api.js     接口层目录探测
 files/app/web/                前端 dist
-files/app/api/                接口层的依赖
+files/app/api/                接口层（node_modules 布局或裸包布局都认）
 files/app/certs/openssl.cnf   OpenSSL 配置（必须显式指定，见下）
+files/app/.pids               进程清单，停止/重启时用来清残留
 files/app/logs/{api,web}.log  两个子进程的输出
+files/app/logs/runtime.log    总管输出
 files/app/.installed          解压标记，内容是 versionName
 ```
 
@@ -62,12 +67,13 @@ files/app/.installed          解压标记，内容是 versionName
 2. 判断 `isInstalled()`：
    - 否 → 解压运行时（带进度条），完成后启动服务
    - 是 → 直接启动服务
-3. `FoliaService`：
-   - 先探一次 `3000` / `4000`，已经在服务就直接返回（避免重复启动）
+3. `FoliaService.onStartCommand`：
+   - 自己那份进程还活着 → 直接返回
+   - 端口通、但没有进程句柄 → 按 `.pids` 清掉残留（先 SIGTERM，400ms 后 SIGKILL），
+     等端口空出来再启动；仍被占就放弃并写日志
    - `ProcessBuilder` 执行 `files/runtime/bin/node files/app/entry.js`
-   - 注入环境变量（见下）
-   - 把 node 的 stdout/stderr 同时写进 `logs/runtime.log` 和 `diag.log`
-4. `entry.js` 派生两个子进程，各自把输出写进 `logs/api.log` / `logs/web.log`
+   - 注入环境变量（见下），stdout 追加进 `logs/runtime.log` 并抄进 `diag.log`
+4. `entry.js` 派生两个子进程，写 `.pids`，各自把输出写进 `logs/api.log` / `logs/web.log`
 5. `MainActivity` 每 2 秒探一次 `127.0.0.1:3000`；**探通之后才 `loadUrl`**
    （早加载只会拿到连接被拒，然后一直白屏）
 
@@ -87,10 +93,10 @@ files/app/.installed          解压标记，内容是 versionName
 `/sdcard/Android/media/<包名>/diag.log` 是唯一的对外观察窗口：
 
 ```
-[..] install start v=1.12 free=46040MB
+[..] install start v=1.13 free=46040MB
 [..] env targetSdk=28 deviceSdk=37 abi=arm64-v8a uid=10455
 [..] direct cmd=…/runtime/bin/node …/app/entry.js
-[entry] api pid=… web pid=…
+[entry] api(:4000) 与 web(:3000) 已拉起
 [static] Folia web on http://127.0.0.1:3000
 [api-entry] 网易云 API 已就绪 http://127.0.0.1:4000
 [web] 端口已通，开始加载页面
@@ -105,5 +111,6 @@ files/app/.installed          解压标记，内容是 versionName
 1. **targetSdk = 28**：29+ 会禁止执行私有目录里的文件，整套运行时失效
 2. **可执行文件用 `Os.chmod(0755)`**：`File.setExecutable()` 在部分 ROM 上会静默失败
 3. **先探端口再 `loadUrl`**：node 从启动到 bind 需要几百毫秒到几秒
-4. **启动前查重**：判断 3000/4000 已在服务就跳过，否则第二份会 `EADDRINUSE` 崩掉第一份
+4. **启动前清残留**：端口通但没有进程句柄 = 上一条链的孤儿，必须按 `.pids` 清掉，
+   否则新的会 `EADDRINUSE` 崩掉，看门狗也挂不上
 5. **`install-plan.txt` 的字节数必须准**：它同时用于进度和完整性校验

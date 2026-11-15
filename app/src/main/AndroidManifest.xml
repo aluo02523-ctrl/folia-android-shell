@@ -20,6 +20,8 @@
 
     <!-- 播放时不锁屏 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 引导用户把 Folia 加进电池白名单，后台播放才不被 Doze 掐断 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"

@@ -1,6 +1,8 @@
 package com.nuonuo.folia;
 
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -9,6 +11,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.MotionEvent;
 import android.view.View;
@@ -18,6 +21,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -31,16 +35,15 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Folia 安卓启动器 · v0.2「只有 Folia」
+ * 全屏壳：只放一个 WebView，其余全部藏起来。
  *
- * 设计原则：屏幕上除了 Folia 本身，什么都不要。
- *   - 没有标题栏、没有状态条、没有底部 Tab、连状态栏和导航栏都隐掉（沉浸式）
- *   - 终端控制台是"藏起来的面板"：从屏幕最顶边往下拉（或点一下顶边）才出现
- *   - 服务起来了会自动把面板收回去，继续全屏听歌
- *
- * 技术约束（保持上一版）：零第三方依赖、Java 8、不用 Fragment。
+ * - 沉浸式，不画标题栏、状态栏、导航栏
+ * - 日志面板从屏幕顶边下拉（或点一下顶边）才出现，服务起来后自动收起
+ * - 零第三方依赖、Java 8、不用 Fragment
  */
 public class MainActivity extends Activity implements View.OnClickListener {
 
@@ -51,6 +54,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private static final int COLOR_OK = 0xFF34C759;
     private static final int COLOR_WARN = 0xFFF5A623;
     private static final int COLOR_ERR = 0xFFF87171;
+    private static final int REQ_FILE_CHOOSER = 1001;
 
     private WebView webView;
     private View topEdge;
@@ -84,8 +88,11 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private boolean lastLoadFailed = false;
     /** 恢复重试计数，别死循环 */
     private int recoverTries = 0;
-    /** 已经替用户喊过一次 Termux 启动了 */
+    /** 已经替用户重拉过一次运行时 */
     private boolean autoStartAsked = false;
+    /** 正在等用户选文件；回调只能回一次，所以得留着 */
+    private ValueCallback<Uri[]> fileChooserCallback;
+    private boolean bridgeLogged = false;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -93,6 +100,9 @@ public class MainActivity extends Activity implements View.OnClickListener {
             drainLogs();
             if (tick % 4 == 0) {
                 probePortsAsync();
+            }
+            if (tick % 4 == 2) {
+                pollMediaState();
             }
             tick++;
             ui.postDelayed(this, 500);
@@ -121,6 +131,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         findViewById(R.id.btnStart).setOnClickListener(this);
         findViewById(R.id.btnStop).setOnClickListener(this);
         findViewById(R.id.btnClear).setOnClickListener(this);
+        findViewById(R.id.btnBattery).setOnClickListener(this);
         findViewById(R.id.btnClose).setOnClickListener(this);
 
         setupTopEdge();
@@ -136,9 +147,10 @@ public class MainActivity extends Activity implements View.OnClickListener {
         appendLog("· 应用:   " + appDir.getAbsolutePath() + "\n");
 
         setupWebView();
+        FoliaService.bindHost(this);
         ui.post(ticker);
 
-        // 第一次打开：先把随包带的 rootfs / node / 网页摊到应用私有目录
+        // 第一次打开：先把随包带的 node、动态库、网页摊到应用私有目录
         if (!EmbeddedRuntime.isInstalled(this)) {
             startInstall();
         } else {
@@ -147,6 +159,19 @@ public class MainActivity extends Activity implements View.OnClickListener {
     }
 
     // ---------------------------------------------------------------- WebView
+
+    /** 只有本机的两个 host 算"自己人"，其余一律丢给系统浏览器 */
+    private static boolean isLocalUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        Uri u = Uri.parse(url);
+        if (!"http".equals(u.getScheme())) {
+            return false;
+        }
+        String host = u.getHost();
+        return "127.0.0.1".equals(host) || "localhost".equals(host);
+    }
 
     private void setupWebView() {
         // 注意：这里故意不 loadUrl。
@@ -169,10 +194,12 @@ public class MainActivity extends Activity implements View.OnClickListener {
         s.setMediaPlaybackRequiresUserGesture(false);   // 音乐播放器必须
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
 
+        w.addJavascriptInterface(new Bridge(), "FoliaBridge");
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                if (url != null && (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost"))) {
+                // 认 host，不认前缀：http://127.0.0.1.evil.com 也以 http://127.0.0.1 开头
+                if (isLocalUrl(url)) {
                     return false;
                 }
                 try {
@@ -199,6 +226,12 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 loadingPage = false;
                 lastLoadFailed = false;
                 recoverTries = 0;
+                // 页面就绪后装播放状态桥；重建 WebView 也会走到这里
+                String js = mediaJs();
+                DiagLog.line(MainActivity.this, "media", "注入桥 " + js.length() + " 字节");
+                if (js.length() > 0) {
+                    v.evaluateJavascript(js, null);
+                }
                 if (terminalOpen) {
                     appendLog("· 页面加载完成\n");
                 }
@@ -240,6 +273,34 @@ public class MainActivity extends Activity implements View.OnClickListener {
                         + " @" + m.sourceId() + ":" + m.lineNumber());
                 return true;
             }
+
+            /**
+             * 页面里的 <input type="file"> 必须有这个回调才有反应，否则点了什么都不弹。
+             * 用 ACTION_OPEN_DOCUMENT（SAF）而不是 GET_CONTENT：它能持久授权，
+             * 前端把 Uri 存进 localStorage 之后，重开 App 也还能读。
+             */
+            @Override
+            public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                }
+                fileChooserCallback = cb;
+                try {
+                    startActivityForResult(buildFilePickerIntent(params), REQ_FILE_CHOOSER);
+                    return true;
+                } catch (Throwable t) {
+                    DiagLog.line(MainActivity.this, "file", "拉起选择器失败: " + t);
+                    fileChooserCallback = null;
+                    cb.onReceiveValue(null);
+                    return false;
+                }
+            }
+        });
+        w.setDownloadListener(new android.webkit.DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                handleDownload(url, cd, mime);
+            }
         });
         w.setBackgroundColor(0xFF000000);
     }
@@ -271,7 +332,202 @@ public class MainActivity extends Activity implements View.OnClickListener {
         }
     }
 
-    /** 页面没加载成功时的自愈：等服务起来 → 重新加载；服务没起 → 顺手让 Termux 拉起来 */
+    // ---------------------------------------------------------------- 播放状态桥
+
+    /** 页面里每秒推一次状态；挂在这里只是为了让 JS 能调进来 */
+    public class Bridge {
+        /**
+         * 这个回调跑在 WebView 的 "JavaBridge" 线程上，不能碰 WebView 的方法
+         * （getUrl 会抛 "A WebView method was called on thread 'JavaBridge'"），
+         * 所以整段都丢回主线程。
+         */
+        @android.webkit.JavascriptInterface
+        public void state(final String payload) {
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!isLocalUrl(webView == null ? null : webView.getUrl())) {
+                        return;
+                    }
+                    onMediaState(payload, "push");
+                }
+            });
+        }
+    }
+
+    /**
+     * 主动从页面拉一次状态。
+     *
+     * 主路径用轮询而不是 addJavascriptInterface 推：接口对象在某些机器的
+     * WebView 上能看到但不一定能调，轮询只依赖 evaluateJavascript，稳得多。
+     */
+    private void pollMediaState() {
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript("window.__foliaState ? window.__foliaState() : ''", new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(String v) {
+                if (v == null || v.length() < 3) {
+                    return;
+                }
+                try {
+                    Object o = new org.json.JSONTokener(v).nextValue();
+                    if (o instanceof String) {
+                        onMediaState((String) o, "poll");
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
+    private void onMediaState(String payload, String via) {
+        if (payload == null || payload.length() < 5) {
+            return;
+        }
+        if (!bridgeLogged) {
+            bridgeLogged = true;
+            DiagLog.line(MainActivity.this, "media",
+                    "第一次收到页面状态(" + via + "): " + payload.replace('\u0001', '|'));
+        }
+        FoliaService.onWebState(payload);
+    }
+
+    /** 注入脚本缓存（res/raw/media_bridge.js） */
+    private String mediaJs;
+
+    private String mediaJs() {
+        if (mediaJs != null) {
+            return mediaJs;
+        }
+        try {
+            java.io.InputStream in = getResources().openRawResource(R.raw.media_bridge);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = in.read(buf)) > 0) {
+                bos.write(buf, 0, r);
+            }
+            in.close();
+            mediaJs = new String(bos.toByteArray(), "UTF-8");
+        } catch (Throwable t) {
+            DiagLog.line(this, "media", "读注入脚本失败 " + t);
+            mediaJs = "";
+        }
+        return mediaJs;
+    }
+
+    /** 锁屏/通知栏的指令 → 页面 */
+    void evalMediaCommand(String cmd, long value) {
+        if (!"play".equals(cmd) && !"pause".equals(cmd) && !"toggle".equals(cmd)
+                && !"seek".equals(cmd) && !"next".equals(cmd) && !"prev".equals(cmd)) {
+            return;
+        }
+        final String js = "window.__foliaMediaCmd && window.__foliaMediaCmd('"
+                + cmd + "'," + value + ")";
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                if (webView != null) {
+                    webView.evaluateJavascript(js, null);
+                }
+            }
+        });
+    }
+
+    /** 按页面给的 accept / 多选拼一个 SAF 的 ACTION_OPEN_DOCUMENT */
+    private Intent buildFilePickerIntent(WebChromeClient.FileChooserParams params) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        List<String> mimes = new ArrayList<String>();
+        String[] accept = params == null ? null : params.getAcceptTypes();
+        if (accept != null) {
+            for (String a : accept) {
+                // 只认 "audio/*" 这种 MIME，".mp3" 这种扩展名 OPEN_DOCUMENT 不认
+                if (a != null && a.indexOf('/') >= 0) {
+                    mimes.add(a);
+                }
+            }
+        }
+        if (mimes.isEmpty()) {
+            i.setType("*/*");
+        } else if (mimes.size() == 1) {
+            i.setType(mimes.get(0));
+        } else {
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0]));
+        }
+        if (params != null && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        return i;
+    }
+
+    /** 页面的下载链接：落到 App 私有下载目录，不需要存储权限 */
+    private void handleDownload(String url, String contentDisposition, String mime) {
+        DiagLog.line(this, "file", "下载 " + url);
+        if (url == null || !url.startsWith("http")) {
+            toast("这个链接没法直接下载");
+            return;
+        }
+        try {
+            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, name);
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (dm == null) {
+                toast("下载服务不可用");
+                return;
+            }
+            dm.enqueue(r);
+            toast("开始下载：" + name);
+        } catch (Throwable t) {
+            DiagLog.line(this, "file", "下载失败 " + t);
+            toast("下载失败");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQ_FILE_CHOOSER) {
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+        Uri[] uris = null;
+        if (resultCode == RESULT_OK && data != null) {
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+                uris = new Uri[clip.getItemCount()];
+                for (int i = 0; i < clip.getItemCount(); i++) {
+                    uris[i] = clip.getItemAt(i).getUri();
+                }
+            } else if (data.getData() != null) {
+                uris = new Uri[]{data.getData()};
+            }
+        }
+        if (uris != null) {
+            for (Uri u : uris) {
+                try {
+                    // 让前端把 Uri 存下来之后重开 App 也还能读
+                    getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Throwable ignored) {
+                    // 有的 provider 不给持久授权，当次能用就行
+                }
+            }
+            DiagLog.line(this, "file", "选中 " + uris.length + " 个文件: " + uris[0]);
+        } else {
+            DiagLog.line(this, "file", "选择取消");
+        }
+        if (fileChooserCallback != null) {
+            fileChooserCallback.onReceiveValue(uris);
+            fileChooserCallback = null;
+        }
+    }
+
+    /** 页面没加载成功时的自愈：端口通了就重载，没通就把内置运行时拉起来 */
     private final Runnable recover = new Runnable() {
         @Override
         public void run() {
@@ -282,7 +538,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
                 return;                    // 试够了就停，别一直转
             }
             recoverTries++;
-            if (PortProbe.alive(3000)) {
+            if (PortProbe.isOpen(3000)) {
                 lastLoadFailed = false;
                 // 前两次用 127.0.0.1，再失败就换 localhost 试试（有些 ROM 只隔离其中一个）
                 String url = recoverTries <= 2 ? URL_FOLIA : URL_FOLIA_LOCALHOST;
@@ -429,8 +685,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final boolean web = PortProbe.alive(3000);
-                final boolean api = PortProbe.alive(4000);
+                final boolean web = PortProbe.isOpen(3000);
+                final boolean api = PortProbe.isOpen(4000);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -443,6 +699,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     private void applyStatus(boolean web, boolean api) {
         boolean wasWeb = webAlive;
+        boolean changed = web != webAlive || api != apiAlive;
         webAlive = web;
         apiAlive = api;
 
@@ -459,7 +716,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
             }
         }
 
-        if (web != webAlive) {
+        if (changed) {
             DiagLog.line(this, "probe", "Java 侧探测 3000=" + web + " 4000=" + api);
         }
         // 端口通了、页面还没成功加载过 → 加载一次（用 loadingPage 防止重复触发）
@@ -520,6 +777,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
         } else if (id == R.id.btnStop) {
             autoCloseWhenReady = false;
             stopServices();
+        } else if (id == R.id.btnBattery) {
+            requestBatteryExemption();
         } else if (id == R.id.btnClear) {
             logBuf.setLength(0);
             terminalText.setText("");
@@ -542,6 +801,32 @@ public class MainActivity extends Activity implements View.OnClickListener {
         toast("已停止");
     }
 
+    /** 引导把 App 加进电池白名单：后台播放最常见的死法就是被 Doze 掐断 */
+    private void requestBatteryExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            toast("这个系统版本没有电池优化");
+            return;
+        }
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                toast("已经在白名单里了");
+                return;
+            }
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+            appendLog("· 已请求电池优化白名单\n");
+        } catch (Throwable t) {
+            // 部分 ROM 没这个弹窗，退回设置列表
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Throwable ignored) {
+                toast("这个系统没有对应设置");
+            }
+            DiagLog.line(this, "power", "直接请求失败，改开列表: " + t);
+        }
+    }
+
     // ---------------------------------------------------------------- 首次解压 / 启动
 
     /** 第一次打开：把 APK 里的运行时摊开（要写 140MB 左右，后台线程干） */
@@ -551,7 +836,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         }
         installOverlay.setVisibility(View.VISIBLE);
         installOverlay.setOnClickListener(null);
-        installText.setText("首次启动：正在展开内置运行时…\n（约 140MB，请别退出）");
+        installText.setText("首次启动：正在展开内置运行时…\n（约 130MB，请别退出）");
         installBar.setProgress(0);
         appendLog("· 首次启动：解压内置运行时\n");
 
@@ -632,8 +917,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         if (!terminalOpen) {
             goImmersive();
         }
-        // ★ v0.3 关键修复：之前 onPause 里 webView.onPause() 了却从没配对唤醒，
-        //   切后台再回来画面就冻在半渲染状态（白屏/卡帧）。这里必须 onResume + resumeTimers。
+        // 切后台再回来必须配对唤醒：只 onPause 不 onResume，画面会冻在半渲染状态
         if (webView != null) {
             webView.onResume();
             webView.resumeTimers();
@@ -658,8 +942,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     @Override
     protected void onPause() {
         super.onPause();
-        // 注意：这里故意不再调 webView.onPause()。
-        // 这是个音乐播放器，切后台还要继续放；暂停 WebView 会让回来时画面不动。
+        // 故意不调 webView.onPause()：这是音乐播放器，切后台要继续放
     }
 
     @Override
@@ -677,7 +960,12 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
     @Override
     protected void onDestroy() {
+        FoliaService.unbindHost(this);
         ui.removeCallbacks(ticker);
+        if (fileChooserCallback != null) {
+            fileChooserCallback.onReceiveValue(null);
+            fileChooserCallback = null;
+        }
         if (webView != null) {
             webView.destroy();
         }
