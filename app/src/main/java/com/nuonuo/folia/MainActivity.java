@@ -1,6 +1,8 @@
 package com.nuonuo.folia;
 
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -18,6 +20,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -31,6 +34,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 全屏壳：只放一个 WebView，其余全部藏起来。
@@ -48,6 +53,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private static final int COLOR_OK = 0xFF34C759;
     private static final int COLOR_WARN = 0xFFF5A623;
     private static final int COLOR_ERR = 0xFFF87171;
+    private static final int REQ_FILE_CHOOSER = 1001;
 
     private WebView webView;
     private View topEdge;
@@ -83,6 +89,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
     private int recoverTries = 0;
     /** 已经替用户重拉过一次运行时 */
     private boolean autoStartAsked = false;
+    /** 正在等用户选文件；回调只能回一次，所以得留着 */
+    private ValueCallback<Uri[]> fileChooserCallback;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -251,6 +259,34 @@ public class MainActivity extends Activity implements View.OnClickListener {
                         + " @" + m.sourceId() + ":" + m.lineNumber());
                 return true;
             }
+
+            /**
+             * 页面里的 <input type="file"> 必须有这个回调才有反应，否则点了什么都不弹。
+             * 用 ACTION_OPEN_DOCUMENT（SAF）而不是 GET_CONTENT：它能持久授权，
+             * 前端把 Uri 存进 localStorage 之后，重开 App 也还能读。
+             */
+            @Override
+            public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                }
+                fileChooserCallback = cb;
+                try {
+                    startActivityForResult(buildFilePickerIntent(params), REQ_FILE_CHOOSER);
+                    return true;
+                } catch (Throwable t) {
+                    DiagLog.line(MainActivity.this, "file", "拉起选择器失败: " + t);
+                    fileChooserCallback = null;
+                    cb.onReceiveValue(null);
+                    return false;
+                }
+            }
+        });
+        w.setDownloadListener(new android.webkit.DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                handleDownload(url, cd, mime);
+            }
         });
         w.setBackgroundColor(0xFF000000);
     }
@@ -279,6 +315,97 @@ public class MainActivity extends Activity implements View.OnClickListener {
             if (terminalOpen) {
                 appendLog("! 重建 WebView 失败: " + t + "\n");
             }
+        }
+    }
+
+    /** 按页面给的 accept / 多选拼一个 SAF 的 ACTION_OPEN_DOCUMENT */
+    private Intent buildFilePickerIntent(WebChromeClient.FileChooserParams params) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        List<String> mimes = new ArrayList<String>();
+        String[] accept = params == null ? null : params.getAcceptTypes();
+        if (accept != null) {
+            for (String a : accept) {
+                // 只认 "audio/*" 这种 MIME，".mp3" 这种扩展名 OPEN_DOCUMENT 不认
+                if (a != null && a.indexOf('/') >= 0) {
+                    mimes.add(a);
+                }
+            }
+        }
+        if (mimes.isEmpty()) {
+            i.setType("*/*");
+        } else if (mimes.size() == 1) {
+            i.setType(mimes.get(0));
+        } else {
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0]));
+        }
+        if (params != null && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        return i;
+    }
+
+    /** 页面的下载链接：落到 App 私有下载目录，不需要存储权限 */
+    private void handleDownload(String url, String contentDisposition, String mime) {
+        DiagLog.line(this, "file", "下载 " + url);
+        if (url == null || !url.startsWith("http")) {
+            toast("这个链接没法直接下载");
+            return;
+        }
+        try {
+            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, name);
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (dm == null) {
+                toast("下载服务不可用");
+                return;
+            }
+            dm.enqueue(r);
+            toast("开始下载：" + name);
+        } catch (Throwable t) {
+            DiagLog.line(this, "file", "下载失败 " + t);
+            toast("下载失败");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQ_FILE_CHOOSER) {
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+        Uri[] uris = null;
+        if (resultCode == RESULT_OK && data != null) {
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+                uris = new Uri[clip.getItemCount()];
+                for (int i = 0; i < clip.getItemCount(); i++) {
+                    uris[i] = clip.getItemAt(i).getUri();
+                }
+            } else if (data.getData() != null) {
+                uris = new Uri[]{data.getData()};
+            }
+        }
+        if (uris != null) {
+            for (Uri u : uris) {
+                try {
+                    // 让前端把 Uri 存下来之后重开 App 也还能读
+                    getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Throwable ignored) {
+                    // 有的 provider 不给持久授权，当次能用就行
+                }
+            }
+            DiagLog.line(this, "file", "选中 " + uris.length + " 个文件: " + uris[0]);
+        } else {
+            DiagLog.line(this, "file", "选择取消");
+        }
+        if (fileChooserCallback != null) {
+            fileChooserCallback.onReceiveValue(uris);
+            fileChooserCallback = null;
         }
     }
 
@@ -688,6 +815,10 @@ public class MainActivity extends Activity implements View.OnClickListener {
     @Override
     protected void onDestroy() {
         ui.removeCallbacks(ticker);
+        if (fileChooserCallback != null) {
+            fileChooserCallback.onReceiveValue(null);
+            fileChooserCallback = null;
+        }
         if (webView != null) {
             webView.destroy();
         }

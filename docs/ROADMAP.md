@@ -10,6 +10,7 @@
 - [x] 前台服务守护 + 看门狗（稳定运行后重新计数）
 - [x] 孤儿进程清理：`.pids` + 启动前杀残留，避免端口被占、看门狗挂空
 - [x] 两个子服务各自写日志（`logs/api.log` / `logs/web.log`），面板一起 tail
+- [x] 本地文件入口：`<input type="file">` 走 SAF（持久授权），下载链接落 App 私有目录
 - [x] 离线构建链：`aapt2 → javac → d8 → align.py → apksigner`，不依赖 Gradle
 - [x] 构建脚本合并成一份 `build.sh`，带 `--compile-only`（CI 不需要 130MB 运行时就能验编译）
 - [x] 版本号单一来源 `version.properties`（脚本和 Gradle 共用）
