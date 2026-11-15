@@ -119,11 +119,15 @@ final class MediaSessionHost {
         artist = f[1];
         album = f[2];
         artUrl = f[3];
+        boolean wasPlaying = playing;
         playing = "1".equals(f[4]);
         position = parseLong(f[5]);
         duration = parseLong(f[6]);
 
         start();
+        if (wasPlaying != playing) {
+            svc.setPlaying(playing);
+        }
         if (session == null) {
             return;
         }

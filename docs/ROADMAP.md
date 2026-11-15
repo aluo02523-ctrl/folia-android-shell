@@ -12,6 +12,7 @@
 - [x] 两个子服务各自写日志（`logs/api.log` / `logs/web.log`），面板一起 tail
 - [x] 本地文件入口：`<input type="file">` 走 SAF（持久授权），下载链接落 App 私有目录
 - [x] 锁屏/通知栏控制：注入脚本钩 `<audio>`，桥到 MediaSession（封面、进度、上一首/下一首、耳机线控）
+- [x] 保活：播放时持 PARTIAL WakeLock，面板里可一键请求电池白名单
 - [x] 离线构建链：`aapt2 → javac → d8 → align.py → apksigner`，不依赖 Gradle
 - [x] 构建脚本合并成一份 `build.sh`，带 `--compile-only`（CI 不需要 130MB 运行时就能验编译）
 - [x] 版本号单一来源 `version.properties`（脚本和 Gradle 共用）
@@ -31,7 +32,7 @@
 
 ## 想做的
 
-1. **MediaSession**：锁屏/耳机线控、通知栏封面与进度
+1. **音频搬出 WebView**：换原生播放器内核，才能做到"划掉任务还继续放"（现在 Audio 在 Activity 的 WebView 里，Activity 一销毁就停）
 2. **摆脱 targetSdk 28**：node 改名 `lib/arm64-v8a/libnode.so`，让系统当原生库解压
    （顺带省掉 51 MB 的首次拷贝）
 3. **减小包体**：把 ICU 换成 small-icu 或按需裁剪，能省 30 MB 左右

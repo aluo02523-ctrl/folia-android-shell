@@ -4,6 +4,7 @@
     <string name="start">启动</string>
     <string name="stop">停止</string>
     <string name="clear">清屏</string>
+    <string name="battery">免优化</string>
     <string name="close">✕</string>
     <string name="installing_hint">第一次打开要展开自带的运行时，请稍等</string>
     <string name="empty_title">Folia 没起来</string>

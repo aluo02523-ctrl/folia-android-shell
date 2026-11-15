@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.MotionEvent;
 import android.view.View;
@@ -126,6 +127,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         findViewById(R.id.btnStart).setOnClickListener(this);
         findViewById(R.id.btnStop).setOnClickListener(this);
         findViewById(R.id.btnClear).setOnClickListener(this);
+        findViewById(R.id.btnBattery).setOnClickListener(this);
         findViewById(R.id.btnClose).setOnClickListener(this);
 
         setupTopEdge();
@@ -722,6 +724,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
         } else if (id == R.id.btnStop) {
             autoCloseWhenReady = false;
             stopServices();
+        } else if (id == R.id.btnBattery) {
+            requestBatteryExemption();
         } else if (id == R.id.btnClear) {
             logBuf.setLength(0);
             terminalText.setText("");
@@ -742,6 +746,32 @@ public class MainActivity extends Activity implements View.OnClickListener {
         appendLog("\n$ 停止内置运行时\n");
         EmbeddedRuntime.stop(this);
         toast("已停止");
+    }
+
+    /** 引导把 App 加进电池白名单：后台播放最常见的死法就是被 Doze 掐断 */
+    private void requestBatteryExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            toast("这个系统版本没有电池优化");
+            return;
+        }
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                toast("已经在白名单里了");
+                return;
+            }
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+            appendLog("· 已请求电池优化白名单\n");
+        } catch (Throwable t) {
+            // 部分 ROM 没这个弹窗，退回设置列表
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Throwable ignored) {
+                toast("这个系统没有对应设置");
+            }
+            DiagLog.line(this, "power", "直接请求失败，改开列表: " + t);
+        }
     }
 
     // ---------------------------------------------------------------- 首次解压 / 启动

@@ -10,6 +10,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.system.Os;
 import android.system.OsConstants;
 import android.util.Log;
@@ -45,6 +46,8 @@ public class FoliaService extends Service {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private MediaSessionHost media;
+    /** 播放时的 CPU 锁：Doze 一上来流媒体会卡首缓冲，这个能压住 */
+    private PowerManager.WakeLock wake;
     private volatile Process proc;
     private Thread watchdog;
     private volatile boolean stopping = false;
@@ -107,13 +110,17 @@ public class FoliaService extends Service {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        // 划掉任务卡片也别停：这是音乐播放器
+        // 划掉任务卡片也别停：这是音乐播放器。服务本身是 START_STICKY 会留下，
+        // 但 WebView 所在的 Activity 会被销毁，音频是从 Activity 里出去的 ——
+        // 所以"划掉还能继续放"要等把音频搬出 WebView（见 ROADMAP）。
+        DiagLog.line(this, "task", "任务卡片被划掉，服务保留");
         super.onTaskRemoved(rootIntent);
     }
 
     @Override
     public void onDestroy() {
         stopping = true;
+        setPlaying(false);
         killRuntime();
         if (media != null) {
             media.stop();
@@ -562,6 +569,31 @@ public class FoliaService extends Service {
 
     void onMain(Runnable r) {
         main.post(r);
+    }
+
+    /** 播放状态变了：管 WakeLock */
+    void setPlaying(boolean playing) {
+        try {
+            if (playing) {
+                if (wake == null) {
+                    PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                    if (pm == null) {
+                        return;
+                    }
+                    wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Folia:playback");
+                    wake.setReferenceCounted(false);
+                }
+                if (!wake.isHeld()) {
+                    wake.acquire();
+                    DiagLog.line(this, "power", "播放中，持有 WakeLock");
+                }
+            } else if (wake != null && wake.isHeld()) {
+                wake.release();
+                DiagLog.line(this, "power", "停止播放，释放 WakeLock");
+            }
+        } catch (Throwable t) {
+            DiagLog.line(this, "power", "WakeLock 异常 " + t);
+        }
     }
 
     // ---------------------------------------------------------------- 与页面互通
